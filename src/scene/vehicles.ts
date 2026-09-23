@@ -7,6 +7,8 @@ import { POSITIONS } from './common.ts';
 import type { SceneContext } from './common.ts';
 import { paintedMetal, corrugated, chevrons, poolGradient, softCone } from './textures.ts';
 import type { SceneLights } from './lights.ts';
+import { depotBay, parkPose, routeFor, routeLength, Traffic } from './traffic.ts';
+import type { Point, TruckInput } from './traffic.ts';
 
 // Utility bucket trucks replacing the old box vans. Truck local space: +x is the
 // nose, origin at ground level. Spec dims: length 1.9, width .78, cab .78 tall,
@@ -67,28 +69,14 @@ interface Truck {
   prev: THREE.Vector3 | null;
   headingLag: number;
   headingNow: number | null;
+  routeKey: string;
+  route: Point[] | null;
+  routeLen: number;
 }
-
-// Trucks park at the road edge beside the substation yard on a road segment that
-// faces the default camera. Presentation only — the domain arrival tick is
-// unchanged. Feeder A sits on the west road at the yard's south junction (the
-// old link-road spot was screened by trees/housing); Feeder B takes the link
-// road east of its yard.
-const PARK: Record<FeederId, [number, number]> = {
-  'feeder-a': [-8, -1.4],
-  'feeder-b': [7.1, -1.8],
-};
-const parkSpot = (feeder: FeederId): THREE.Vector3 =>
-  new THREE.Vector3(PARK[feeder][0], .48, PARK[feeder][1]);
-
-// Idle trucks sit nose-in at the depot's two garage doors (doors at depot ±.72).
-// Trucks are 1.9 long — parking them along x at the old 1.3 spacing made them
-// interpenetrate, so they face the doors and stack across x instead.
-const depotSpot = (index: number): THREE.Vector3 =>
-  new THREE.Vector3(POSITIONS.depot[0] + (index ? .72 : -.72), .48, POSITIONS.depot[1] + 2.25);
 
 export class Fleet {
   private trucks = new Map<CrewId, Truck>();
+  private traffic = new Traffic();
   private dummy = new THREE.Object3D();
 
   constructor(private ctx: SceneContext, lights: SceneLights) {
@@ -310,6 +298,7 @@ export class Fleet {
       head, tail, strobe, chevron: chevronMaterial, lamp,
       workSpot, workPool, workCone, flash, site: null,
       boom: 0, distance: 0, prev: null, headingLag: 0, headingNow: null,
+      routeKey: '', route: null, routeLen: 0,
     };
   }
 
@@ -319,11 +308,13 @@ export class Fleet {
     const parts: THREE.BufferGeometry[] = [];
     const colors = [0x5a6a6e, 0x7a6f66, 0x40484e, 0x6b7a85, 0x8a8078, 0x4f5a5f];
     const dark = 0x1c2226, glass = 0x1a2430;
-    // [x, z, heading, sedan]
+    // [x, z, heading, sedan] — kerb spots kept clear of every traffic route's
+    // footprint (the link road is too narrow for kerb parking + passing trucks,
+    // so those two sit on the west road and the main road's east stretch).
     const spots: [number, number, number, boolean][] = [
       [-10.7, 1.32, 0, false], [10.7, 2.28, Math.PI, true],
       [-8.48, -6.6, Math.PI / 2, false], [8.48, -6.9, -Math.PI / 2, true],
-      [1.8, -1.58, 0, false], [-4.8, -2.62, Math.PI, true],
+      [-8.48, -4.8, Math.PI / 2, false], [1.8, 1.25, 0, true],
     ];
     spots.forEach(([x, z, heading, sedan], i) => {
       const local: THREE.BufferGeometry[] = [];
@@ -461,61 +452,72 @@ export class Fleet {
     return false;
   }
 
-  // Per-frame presentation update: travel interpolation on the authored route,
-  // wheel roll, suspension, parking pose, boom and outriggers, light materials.
-  update(state: State, fraction: number, now: number, dt: number, nightness: number): void {
+  // Per-frame presentation update. The pure Traffic module owns routes, lane
+  // offsets, the shown-vs-schedule distance chase and yield holds; this method
+  // poses the three.js truck and keeps wheels/suspension/boom/lights.
+  // `tickRate` is the selected sim speed (ticks per real second); `review`
+  // forces snapped poses for replay/scrubbing.
+  update(state: State, fraction: number, now: number, dt: number, nightness: number, tickRate = 10, review = false): void {
     const reduced = this.ctx.reduced.matches;
     // Moored boats: gentle bob + roll, pinned flat under reduced motion.
     for (const boat of this.boats) {
       boat.root.position.y = boat.base + (reduced ? 0 : Math.sin(now * .8 + boat.phase) * .035);
       boat.root.rotation.z = reduced ? 0 : Math.sin(now * .55 + boat.phase * 1.3) * .018;
     }
+    const snap = reduced || review;
+    const inputs: TruckInput[] = CREW_IDS.map((id, index) => {
+      const crew = state.crews[id];
+      const truck = this.trucks.get(id)!;
+      if (crew.phase !== 'idle' && crew.target !== null) {
+        // En route or doing the post-arrival catch-up drive: keep the route
+        // until the truck is visually parked at the feeder.
+        const key = `${crew.origin}>${crew.target}@${crew.departedAt}`;
+        if (truck.routeKey !== key) {
+          truck.routeKey = key;
+          truck.route = routeFor(index as 0 | 1, crew.origin, crew.target);
+          truck.routeLen = routeLength(truck.route);
+        }
+        const trip = Math.max(1, crew.arriveAt - crew.departedAt);
+        const progress = crew.phase === 'repairing'
+          ? 1
+          : Math.min(1, Math.max(0, (state.tick + (reduced ? 0 : fraction) - crew.departedAt) / trip));
+        return {
+          route: truck.route,
+          scheduleDistance: progress * truck.routeLen,
+          nominalSpeed: truck.routeLen * tickRate / trip,
+          priority: crew.departedAt * 2 + index, // earlier departure wins; tie -> crew-1
+          snap,
+          parked: null,
+        };
+      }
+      truck.routeKey = '';
+      truck.route = null;
+      return {
+        route: null,
+        scheduleDistance: 0,
+        nominalSpeed: 0,
+        priority: index,
+        snap,
+        // At a feeder kerb the last route-end pose already matches PARK;
+        // passing null keeps it, so no heading snap on the idle transition.
+        // Under snap conditions (replay/reduced) a canonical pose is supplied
+        // so scrubbing never reuses a stale pose from another point in time.
+        parked: crew.location === 'depot' ? depotBay(index as 0 | 1) : snap ? parkPose(crew.location) : null,
+      };
+    });
+    const poses = this.traffic.step(inputs, dt);
     for (const [index, id] of CREW_IDS.entries()) {
       const crew = state.crews[id];
       const truck = this.trucks.get(id)!;
-      const traveling = crew.phase === 'traveling' && crew.target !== null;
-      let heading = 0;
-      if (traveling) {
-        const target = crew.target!;
-        const [tx, tz] = POSITIONS[target];
-        const park = parkSpot(target);
-        const origin = POSITIONS[crew.origin];
-        // Exit/approach jogs only exist where the curb spot sits off the road
-        // axis — an axis-parked truck just drives straight to/from the junction.
-        const departure = crew.origin === 'depot'
-          ? [depotSpot(index), new THREE.Vector3(-.9, .48, 6.3), new THREE.Vector3(-.9, .48, 1.8)]
-          : Math.abs(parkSpot(crew.origin).x - origin[0]) < .1
-            ? [parkSpot(crew.origin), new THREE.Vector3(origin[0], .48, 1.8)]
-            : [parkSpot(crew.origin), new THREE.Vector3(origin[0], .48, origin[1] + 2.0), new THREE.Vector3(origin[0], .48, 1.8)];
-        const approach = Math.abs(park.x - tx) < .1
-          ? [park]
-          : [new THREE.Vector3(tx, .48, tz + 2.0), park];
-        const points = [...departure, new THREE.Vector3(tx, .48, 1.8), ...approach];
-        const lengths = points.slice(1).map((point, i) => point.distanceTo(points[i]!));
-        const progress = Math.min(1, Math.max(0, (state.tick + (reduced ? 0 : fraction) - crew.departedAt) / (crew.arriveAt - crew.departedAt)));
-        let distance = progress * lengths.reduce((sum, n) => sum + n, 0);
-        for (let segment = 0; segment < lengths.length; segment++) {
-          const length = lengths[segment]!;
-          if (distance <= length || segment === lengths.length - 1) {
-            const from = points[segment]!;
-            const to = points[segment + 1]!;
-            truck.root.position.lerpVectors(from, to, length ? distance / length : 0);
-            heading = -Math.atan2(to.z - from.z, to.x - from.x);
-            break;
-          }
-          distance -= length;
-        }
-      } else if (crew.location === 'depot') {
-        truck.root.position.copy(depotSpot(index));
-        heading = Math.PI / 2; // nose in at the garage door, rear to the apron
-      } else {
-        const park = parkSpot(crew.location);
-        truck.root.position.copy(park);
-        heading = Math.PI / 2; // nose north, rear toward the road
-      }
+      const pose = poses[index]!;
+      const moving = this.traffic.moving(index);
+      const parked = this.traffic.parked(index);
+      truck.root.position.set(pose.x, .48, pose.z);
+      const heading = pose.heading;
       // Display heading eases toward the route heading so pull-outs and corner
-      // turns read as steering rather than a snap. Reduced motion snaps.
-      if (truck.headingNow === null || reduced) truck.headingNow = heading;
+      // turns read as steering rather than a snap. Reduced motion and replay
+      // scrubbing snap.
+      if (truck.headingNow === null || snap) truck.headingNow = heading;
       let turn = heading - truck.headingNow;
       if (turn > Math.PI) turn -= Math.PI * 2;
       if (turn < -Math.PI) turn += Math.PI * 2;
@@ -533,7 +535,7 @@ export class Fleet {
       truck.prev = truck.root.position.clone();
       truck.headingLag += deltaHeading * Math.min(1, dt * 4);
       const roll = reduced ? 0 : THREE.MathUtils.clamp((heading - truck.headingLag) * .35, -.06, .06);
-      truck.body.position.y = !reduced && traveling ? Math.sin(truck.distance * 6) * .012 : 0;
+      truck.body.position.y = !reduced && moving ? Math.sin(truck.distance * 6) * .012 : 0;
       truck.body.rotation.x = roll;
       const spin = -truck.distance / .17;
       for (let w = 0; w < 6; w++) {
@@ -546,11 +548,14 @@ export class Fleet {
       truck.tyres.instanceMatrix.needsUpdate = true;
       truck.rims.instanceMatrix.needsUpdate = true;
 
-      // Boom: eased from repair progress (up by 10%, folding in the last 5%).
+      // Boom: eased from repair progress (up by 10%, folding in the last 5%),
+      // but only once the truck is visually parked — a truck still catching up
+      // after the arrival tick finishes the drive first, then eases at the
+      // existing rate even if the domain is already past the 10% mark.
       const p = crew.phase === 'repairing'
         ? Math.min(1, Math.max(0, (state.tick + (reduced ? 0 : fraction) - crew.arriveAt) / Math.max(1, crew.completeAt - crew.arriveAt)))
         : 0;
-      let boomTarget = crew.phase === 'repairing' ? smoothstep(0, .1, p) * (1 - smoothstep(.95, 1, p)) : 0;
+      let boomTarget = crew.phase === 'repairing' && parked ? smoothstep(0, .1, p) * (1 - smoothstep(.95, 1, p)) : 0;
       if (reduced) boomTarget = p > 0 && p < 1 ? 1 : 0;
       truck.boom += (boomTarget - truck.boom) * (reduced ? 1 : Math.min(1, dt * 5));
       const boom = truck.boom;
@@ -584,8 +589,8 @@ export class Fleet {
 
       // Lights: headlight emissive mirrors the spotlights (moving + night),
       // tail lights on whenever moving, strobe while the crew is out.
-      truck.head.emissiveIntensity = traveling && nightness > .2 ? 1.6 : .2;
-      truck.tail.emissiveIntensity = traveling ? 1.5 : .12;
+      truck.head.emissiveIntensity = moving && nightness > .2 ? 1.6 : .2;
+      truck.tail.emissiveIntensity = moving ? 1.5 : .12;
       const out = crew.phase !== 'idle';
       const strobeOn = (now * 2) % 1 < .12;
       truck.strobe.emissiveIntensity = !out ? .12 : reduced ? 1.3 : strobeOn ? 4 : .15;

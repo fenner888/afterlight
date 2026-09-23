@@ -894,7 +894,7 @@ function frame(now: number): void {
     const elapsed = lastFrameTime ? now - lastFrameTime : 0;
     lastFrameTime = now;
     if (elapsed > 0) { frameSamples.push(elapsed); if (frameSamples.length > 600) frameSamples.shift(); }
-    scene?.render(view(), clock().fraction);
+    scene?.render(view(), clock().fraction, clock().speed, review !== null);
     const soundState = view();
     const fallback = 1 - connectedLoad(soundState) / 13;
     sound.update({ state: soundState, review: review !== null, rain: scene?.rainDensity ?? fallback, storm: scene?.stormLevel ?? fallback, now: now / 1000 });

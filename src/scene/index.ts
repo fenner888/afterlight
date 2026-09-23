@@ -305,7 +305,7 @@ export class DistrictScene {
     }
   }
 
-  render(state: State, fraction: number): void {
+  render(state: State, fraction: number, tickRate = 10, review = false): void {
     if (this.contextLost) return;
     const now = performance.now() / 1000;
     const dt = Math.min(.1, Math.max(0, now - this.prevNow));
@@ -386,7 +386,7 @@ export class DistrictScene {
         this.rainPositions.needsUpdate = true;
       }
     }
-    this.fleet.update(state, fraction, now, dt, this.sky.nightness);
+    this.fleet.update(state, fraction, now, dt, this.sky.nightness, tickRate, review);
     this.renderer.info.reset();
     if (this.post) this.post.render(dt);
     else this.renderer.render(this.world, this.camera);

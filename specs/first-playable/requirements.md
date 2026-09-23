@@ -135,6 +135,15 @@ Problem found in review: a first-time player sees two clocks, a scene squeezed i
 - Cues: thunder rumble a short delay after each lightning flash (driven by the same deterministic lightning timing); truck engine drone while any crew travels, with a hydraulic whine as the boom raises; intermittent electrical crackle while repairing; feeder repaired = heavy relay clunk + hum swell; reconnect = relay click + a soft pitched chime per service; disconnect = descending click; rejected action = short dull buzz; backup warning = two soft alert tones; generator stop = sputter-out; decision pause = one quiet tone; sunrise = slow warm pad swell while rain/wind fade out.
 - Replay: beds follow the replay cursor state; one-shot cues are silent while scrubbing/reviewing. Restart stops everything and re-arms. Reduced motion does not mute; it removes the lightning/thunder pairing only because lightning is already disabled.
 
+### Traffic awareness (Mark, September 23 — "it drives right through the other car")
+
+Cause: Crew 1's depot exit ran diagonally through Crew 2's parked bay, and both trucks shared one lane at different speeds (fixed 1 h travel regardless of route length). Presentation only — domain arrival ticks are unchanged.
+
+- **Depot**: trucks wait nose-out (facing the apron) at the two garage doors, ready to roll. Each exits forward onto an apron lane that passes clear of the other bay, then joins the depot access road. No authored route may cross a parked truck's footprint or a parked civilian car.
+- **Lanes**: on shared roads trucks keep to a lane by destination — Feeder A–bound on the west lane of the depot access road and the north (westbound) lane of the main road; Feeder B–bound on the east lane and the south (eastbound) lane. Lane offsets stay inside the asphalt.
+- **Yielding**: each truck's shown position trails its schedule position along its route, moving at up to 1.6× its nominal speed. A truck holds whenever its next pose would overlap another moving truck's footprint (length + clearance margin). The truck that departed earlier has right of way; on a tie, the lower crew number goes first. A truck that is still catching up on arrival finishes the drive before its boom rises. In replay, after a time jump (Next event, scrubbing) or under reduced motion, trucks snap to their schedule pose.
+- The route and yield logic is a pure module with no three.js import, so the Node test suite can simulate every dispatch order and delay and assert that no footprints ever overlap.
+
 ### Art (buildings, trees, quay, boat, cars)
 
 - Buildings: parapet/cornice caps, stepped massing, framed windows (inset with sill and lintel, instanced), ground-floor entrances with doors and awnings/canopies, drainpipes, rooftop clutter (HVAC boxes, vents, water tank on housing, antenna). Clinic: entrance canopy with a lit cross sign and a visible generator unit with exhaust stack. Pumping station: pipework and a tank. Lighthouse: gallery railing and glazed lantern room. A distant fog-faded shoreline with a few lit windows across the water (decoration, not nodes), which also softens the horizon band.

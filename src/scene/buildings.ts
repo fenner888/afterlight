@@ -185,7 +185,9 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
     const curb = skin(sets.concrete, 0x5d6c69, 2, .3, .9);
     ctx.box(world, plain(0x2d3c3d), [0, -.25, 0], [25, 1.3, 19]);
     ctx.box(world, platform, [0, .34, 0], [24.8, .15, 18.8]);
-    ctx.box(world, curb, [0, .55, 9.2], [24.8, .38, .25]);
+    // Quay-edge curb, gapped where the depot apron meets the working face.
+    ctx.box(world, curb, [-9.25, .55, 9.2], [6.3, .38, .25]);
+    ctx.box(world, curb, [6.55, .55, 9.2], [11.7, .38, .25]);
     ctx.box(world, curb, [-12.25, .55, 0], [.25, .38, 18.5]);
 
     const roadSet: TextureSet = { map: sets.asphalt.map, roughnessMap: puddles };
@@ -210,6 +212,7 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
     road(0, -2.1, 16, 1.15);    // northern link
     road(-.9, 4.1, 1.4, 4.6);   // depot access
     road(-3, 6.3, 5.6, 1.4);    // south quay link
+    road(-2.7, 8.2, 6.6, 2.4);  // depot apron — paved yard in front of the bays
 
     // Sidewalks + curb lines, segmented so they never cross asphalt.
     for (const [x, w] of [[-10.5, 3.5], [0, 17.5], [10.5, 3.5]] as const) walk(x, .725, w, .5);
@@ -218,13 +221,13 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
       for (const [z, d] of [[-5.34, 5.325], [-.275, 2.5], [5.31, 5.375]] as const) walk(x, z, .5, d);
     }
     for (const z of [-2.925, -1.275]) walk(0, z, 13.4, .5);
-    for (const x of [-1.85, .05]) for (const [z, d] of [[4.09, 2.93], [7.53, .95]] as const) walk(x, z, .5, d);
-    for (const z of [5.35, 7.25]) walk(-3.73, z, 4.15, .5);
+    for (const x of [-1.85, .05]) walk(x, 4.09, .5, 2.93);
+    walk(-3.73, 5.35, 4.15, .5);
     for (const [x, w] of [[-10.5, 3.5], [0, 17.5], [10.5, 3.5]] as const) curbLine(x, .99, w, .08);
     for (const [x, w] of [[-10.5, 3.5], [-5.23, 7.05], [4.33, 8.85], [10.5, 3.5]] as const) curbLine(x, 2.61, w, .08);
     for (const x of [-8.79, -7.21, 7.21, 8.79]) for (const [z, d] of [[-5.34, 5.325], [-.275, 2.5], [5.31, 5.375]] as const) curbLine(x, z, .08, d);
     for (const z of [-2.66, -1.54]) curbLine(0, z, 13.4, .08);
-    for (const x of [-1.56, -.24]) for (const [z, d] of [[4.09, 2.93], [7.53, .95]] as const) curbLine(x, z, .08, d);
+    for (const x of [-1.56, -.24]) curbLine(x, 4.09, .08, 2.93);
     for (const z of [5.64, 6.96]) curbLine(-3.73, z, 4.15, .08);
 
     // Dashed centre lines (skipping junctions) and crosswalks at the two main junctions.
