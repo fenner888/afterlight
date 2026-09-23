@@ -435,7 +435,10 @@ export class DistrictScene {
         this.rainPositions.needsUpdate = true;
       }
     }
-    this.fleet.update(state, fraction, now, dt, this.sky.nightness, tickRate, review);
+    // Work-light additives fade as the camera closes in: full at the fitted
+    // distance, ~38% at the closest zoom so the glow never clips to white.
+    const zoomFade = .38 + .62 * THREE.MathUtils.clamp((distance - this.controls.minDistance) / (this.fitDistance - this.controls.minDistance), 0, 1);
+    this.fleet.update(state, fraction, now, dt, this.sky.nightness, tickRate, review, zoomFade);
     this.renderer.info.reset();
     if (this.post) this.post.render(dt);
     else this.renderer.render(this.world, this.camera);
@@ -505,6 +508,10 @@ export class DistrictScene {
   tilt(delta: number): void { this.animateTo({ phi: this.currentSpherical().phi + delta }); }
   zoom(factor: number): void { this.animateTo({ distance: this.currentSpherical().distance * factor }); }
   focus(point: THREE.Vector3): void { this.animateTo({ target: point, distance: this.fitDistance * .45 }); }
+
+  // Camera azimuth for the compass arrow (north = world -z, up on screen at
+  // theta 0; CSS rotation equals theta).
+  get azimuth(): number { return this.currentSpherical().theta; }
 
   // Read-only snapshot for verification tooling (loopback __scene handle).
   cameraState(): { theta: number; phi: number; distance: number; target: { x: number; z: number } } {

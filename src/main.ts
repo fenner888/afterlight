@@ -915,6 +915,9 @@ function frame(now: number): void {
     const fallback = 1 - connectedLoad(soundState) / 13;
     sound.update({ state: soundState, review: review !== null, rain: scene?.rainDensity ?? fallback, storm: scene?.stormLevel ?? fallback, now: now / 1000 });
     if (popoverNode) positionPopover();
+    // Compass arrow tracks the camera azimuth (north = world -z points up at
+    // the default view; rotating the camera spins the arrow the same amount).
+    element('north-arrow').style.transform = `rotate(${scene?.azimuth ?? 0}rad)`;
     if (now - metricsTime > 1000 && frameSamples.length) {
       metricsTime = now;
       const samples = [...frameSamples].sort((a, b) => a - b);

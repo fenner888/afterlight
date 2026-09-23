@@ -243,8 +243,9 @@ export class Fleet {
     bucket.add(lampMesh);
     // Work light: a spot firing down into the yard plus a soft volumetric cone
     // under the bucket — the "crew working here" signal at default zoom. The
-    // bucket group is level-compensated, so local -y stays world-down.
-    const workSpot = new THREE.SpotLight(0xffe2b0, 0, 7, .6, .6);
+    // bucket group is level-compensated, so local -y stays world-down. Decay is
+    // flattened (1.5, not physical 2) so nearby surfaces don't clip to white.
+    const workSpot = new THREE.SpotLight(0xffe2b0, 0, 7, .6, .6, 1.5);
     workSpot.castShadow = false;
     workSpot.position.set(0, .12, 0);
     const workTarget = new THREE.Object3D();
@@ -457,7 +458,7 @@ export class Fleet {
   // poses the three.js truck and keeps wheels/suspension/boom/lights.
   // `tickRate` is the selected sim speed (ticks per real second); `review`
   // forces snapped poses for replay/scrubbing.
-  update(state: State, fraction: number, now: number, dt: number, nightness: number, tickRate = 10, review = false): void {
+  update(state: State, fraction: number, now: number, dt: number, nightness: number, tickRate = 10, review = false, zoomFade = 1): void {
     const reduced = this.ctx.reduced.matches;
     // Moored boats: gentle bob + roll, pinned flat under reduced motion.
     for (const boat of this.boats) {
@@ -575,13 +576,15 @@ export class Fleet {
       truck.outriggers.forEach((leg, i) => { leg.position.z = (i % 2 ? 1 : -1) * (.28 + .27 * boom); });
 
       // Work light: spot + bucket cone + yard pool glow while the boom is up.
+      // The additive cone and pool fade with camera distance (zoomFade is ~0.38
+      // at closest zoom, 1 at the fitted view) so close-ups don't clip white.
       const working = boom > .5;
       truck.site = working && crew.phase === 'repairing' && crew.location !== 'depot' ? crew.location : null;
-      truck.workSpot.intensity = working ? 60 : 0;
-      truck.workCone.material.opacity = working ? .12 : 0;
+      truck.workSpot.intensity = working ? 30 : 0;
+      truck.workCone.material.opacity = working ? .12 * zoomFade : 0;
       truck.workCone.visible = working;
       truck.workPool.visible = working && truck.site !== null;
-      truck.workPool.material.opacity = truck.workPool.visible ? .3 : 0;
+      truck.workPool.material.opacity = truck.workPool.visible ? .3 * zoomFade : 0;
       if (truck.site) {
         const [fx, fz] = POSITIONS[truck.site];
         truck.workPool.position.set(fx, .74, fz); // substation pad surface

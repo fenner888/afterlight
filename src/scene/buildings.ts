@@ -75,13 +75,13 @@ export class WindowLights {
     ctx.world.add(this.mesh, this.frames);
   }
 
-  addWindow(service: ServiceId, position: THREE.Vector3, side: boolean): void {
+  addWindow(service: ServiceId, position: THREE.Vector3, ry: number): void {
     const index = this.cursor++;
     if (!this.ranges.has(service)) this.ranges.set(service, { start: index, count: 0 });
     this.ranges.get(service)!.count++;
     const matrix = new THREE.Matrix4().compose(
       position,
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, side ? Math.PI / 2 : 0, 0)),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, ry, 0)),
       new THREE.Vector3(1, 1, 1),
     );
     this.mesh.setMatrixAt(index, matrix);
@@ -499,19 +499,22 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
   // Shared vertex-coloured material for merged per-building decoration.
   const trimMaterial = ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .7, metalness: .18, envMapIntensity: .6 }));
 
-  // Instanced windows across all service buildings.
-  const windows = new WindowLights(ctx, 120);
-  const windowFace = (id: ServiceId, width: number, depth: number, height: number, rows: number, frontCols: number, sideCols: number): void => {
+  // Instanced windows across all service buildings — every facade carries them
+  // (front/rear/east/west) so no face reads blank from an orbited camera.
+  const windows = new WindowLights(ctx, 192);
+  const windowFace = (id: ServiceId, width: number, depth: number, height: number, rows: number, frontCols: number, sideCols: number, rearCols: number): void => {
     const [bx, bz] = POSITIONS[id];
     const rowY = (row: number): number => .45 + .14 + .55 + (row + .5) * (height - .9) / rows;
-    for (let row = 0; row < rows; row++) for (let col = 0; col < frontCols; col++) {
-      const x = bx + (col - (frontCols - 1) / 2) * ((width - .8) / Math.max(1, frontCols - 1));
-      windows.addWindow(id, new THREE.Vector3(x, rowY(row), bz + depth / 2 + .017), false);
-    }
-    for (let row = 0; row < rows; row++) for (let col = 0; col < sideCols; col++) {
-      const z = bz + (col - (sideCols - 1) / 2) * ((depth - .8) / Math.max(1, sideCols - 1));
-      windows.addWindow(id, new THREE.Vector3(bx + width / 2 + .017, rowY(row), z), true);
-    }
+    const grid = (count: number, along: number, ry: number, place: (axis: number, y: number) => THREE.Vector3): void => {
+      for (let row = 0; row < rows; row++) for (let col = 0; col < count; col++) {
+        const axis = (col - (count - 1) / 2) * ((along - .8) / Math.max(1, count - 1));
+        windows.addWindow(id, place(axis, rowY(row)), ry);
+      }
+    };
+    grid(frontCols, width, 0, (x, y) => new THREE.Vector3(bx + x, y, bz + depth / 2 + .017));
+    grid(rearCols, width, Math.PI, (x, y) => new THREE.Vector3(bx + x, y, bz - depth / 2 - .017));
+    grid(sideCols, depth, Math.PI / 2, (z, y) => new THREE.Vector3(bx + width / 2 + .017, y, bz + z));
+    grid(sideCols, depth, -Math.PI / 2, (z, y) => new THREE.Vector3(bx - width / 2 - .017, y, bz + z));
   };
 
   const beacon = { pivot: null as THREE.Group | null, lamp: null as THREE.MeshStandardMaterial | null };
@@ -615,12 +618,12 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
         if (axis === 'z') g.rotateX(Math.PI / 2);
         trim.push(colorize(g, color).translate(x, y, z));
       };
-      const doorway = (dx: number, dz: number, canopy: boolean, fabric = 0x5c4f46): void => {
+      const doorway = (dx: number, dz: number, canopy: boolean, fabric = 0x5c4f46, facing = 1): void => {
         t(0x252d31, .5, .92, .07, dx, .61, dz);
         t(0x9aa39c, .62, .08, .1, dx, 1.1, dz);
         if (canopy) {
-          t(fabric, 1.05, .05, .6, dx, 1.2, dz + .3);
-          for (const s of [-.45, .45]) t(0x4a555a, .05, .62, .05, dx + s, .85, dz + .55);
+          t(fabric, 1.05, .05, .6, dx, 1.2, dz + .3 * facing);
+          for (const s of [-.45, .45]) t(0x4a555a, .05, .62, .05, dx + s, .85, dz + .55 * facing);
         }
       };
       ctx.box(group, concreteMat, [0, .07, 0], [width + .5, .14, depth + .6]);
@@ -642,10 +645,13 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
       pipe(0x5c6d75, .045, .4, .1, height + .5, .3, 'y');
       pipe(0x39454a, .018, 1.2, width / 2 - .35, height + .9, -depth / 2 + .4, 'y');
       t(0x39454a, .3, .02, .02, width / 2 - .35, height + 1.3, -depth / 2 + .4);
-      // Drainpipes down both front corners.
-      for (const s of [-1, 1]) pipe(0x46535a, .035, height + .15, s * (width / 2 - .14), .14 + (height + .15) / 2, depth / 2 + .07, 'y');
+      // Drainpipes down all four corners.
+      for (const s of [-1, 1]) {
+        pipe(0x46535a, .035, height + .15, s * (width / 2 - .14), .14 + (height + .15) / 2, depth / 2 + .07, 'y');
+        pipe(0x46535a, .035, height + .15, s * (width / 2 - .14), .14 + (height + .15) / 2, -depth / 2 - .07, 'y');
+      }
       const rows = housing ? 4 : id === 'clinic' ? 2 : 1;
-      if (isService(id)) windowFace(id, width, depth, height, rows, 4, housing || id === 'clinic' ? 4 : 2);
+      if (isService(id)) windowFace(id, width, depth, height, rows, 4, housing || id === 'clinic' ? 4 : 2, housing ? 4 : 3);
       if (housing) {
         const balcony = skin(sets.concrete, 0x8a8278, 1, .2, .8);
         for (let row = 0; row < rows; row++) {
@@ -660,13 +666,20 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
         const [bx, bz] = POSITIONS[id];
         const wy = .45 + height + .34 + setH * .55;
         const frontZ = bz - .16 * depth + setD / 2 + .017;
-        for (let c = -1; c <= 1; c++) windows.addWindow(id, new THREE.Vector3(bx - .15 + c * .42, wy, frontZ), false);
-        for (const dz of [-.2, .2]) windows.addWindow(id, new THREE.Vector3(bx - .15 + setW / 2 + .017, wy, bz - .16 * depth + dz), true);
+        const rearZ = bz - .16 * depth - setD / 2 - .017;
+        for (let c = -1; c <= 1; c++) windows.addWindow(id, new THREE.Vector3(bx - .15 + c * .42, wy, frontZ), 0);
+        for (const c of [-1, 1]) windows.addWindow(id, new THREE.Vector3(bx - .15 + c * .42, wy, rearZ), Math.PI);
+        for (const dz of [-.2, .2]) windows.addWindow(id, new THREE.Vector3(bx - .15 + setW / 2 + .017, wy, bz - .16 * depth + dz), Math.PI / 2);
+        for (const dz of [-.2, .2]) windows.addWindow(id, new THREE.Vector3(bx - .15 - setW / 2 - .017, wy, bz - .16 * depth + dz), -Math.PI / 2);
         // Roof water tank on legs.
         ctx.cylinder(group, concreteMat, [-.75, height + .78, -.45], .3, .55);
         for (const [lx, lz] of [[-.95, -.62], [-.55, -.62], [-.95, -.28], [-.55, -.28]] as const)
           t(0x55606a, .05, .35, .05, lx, height + .38, lz);
         doorway(.9, depth / 2 + .04, true, 0x6a5f52);
+        // Rear service entrance with a small canopy, plus a meter box + conduit.
+        doorway(-.9, -depth / 2 - .04, true, 0x4a555a, -1);
+        t(0x46535a, .24, .34, .08, .75, .78, -depth / 2 - .05);
+        pipe(0x46535a, .03, .6, .75, 1.2, -depth / 2 - .06, 'y');
       }
       if (id === 'clinic') {
         const cross = plain(0x2a3438, 0xd0453e);
@@ -684,6 +697,10 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
         ctx.box(group, generator, [width / 2 + .35, .3, .5], [.55, .45, .7]);
         pipe(0x3a3a34, .045, .75, width / 2 + .35, .85, .25, 'y'); // exhaust stack
         t(0x1e2225, .4, .22, .03, width / 2 + .35, .32, .87);      // vent slats
+        // Rear service door + utility meter and conduit riser.
+        doorway(-.8, -depth / 2 - .04, false, 0x5c4f46, -1);
+        t(0x46535a, .22, .3, .08, .85, .75, -depth / 2 - .05);
+        pipe(0x46535a, .03, .55, .85, 1.15, -depth / 2 - .06, 'y');
       }
       if (id === 'pump') {
         const metal = skin(sets.metalPaint, 0x88979b, 1, 1, .45, .5);
@@ -695,6 +712,10 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
         pipe(0x88979b, .05, .8, .6, .55, -.25, 'y');
         pipe(0x88979b, .05, .8, 1.55, .55, .75, 'y');
         doorway(-.6, depth / 2 + .04, true, 0x4a555a);
+        // Rear louvered vent + conduit riser on the back wall.
+        t(0x2c363b, .7, .5, .05, .4, 1.35, -depth / 2 - .04);
+        t(0x46535a, .76, .05, .07, .4, 1.62, -depth / 2 - .05);
+        pipe(0x88979b, .05, .9, -.9, .55, -depth / 2 - .07, 'y');
       }
       if (id === 'depot') {
         const door = skin(sets.corrugated, 0x6d7c82, 1.2, 1.2, .6, .35);
@@ -706,6 +727,13 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
         t(0x6a7a80, 1.04, .08, 1.84, -width / 2 - .45, 1.54, -.3);
         doorway(1.58, depth / 2 + .04, false);
         doorway(-width / 2 - .45, .61, true, 0x4a555a);
+        // Rear wall: dark clerestory windows (unlit — the depot isn't a powered
+        // service) and a rear personnel door so the north face isn't blank.
+        for (const wx of [-.8, 0, .8]) {
+          t(0x18242a, .55, .35, .05, wx, 1.45, -depth / 2 - .04);
+          t(0x9aa39c, .61, .05, .07, wx, 1.65, -depth / 2 - .05);
+        }
+        doorway(-.95, -depth / 2 - .04, false, 0x4a555a, -1);
       }
       if (trim.length) merged(group, trimMaterial, trim);
     }
