@@ -141,6 +141,7 @@ function openPopover(id: NodeId): void {
   }
   popoverNode = id;
   popoverKey = '';
+  if (scene) scene.popoverOpen = true;
   element('node-actions').hidden = false;
   text('popover-message', '');
   updatePopover();
@@ -152,6 +153,7 @@ function openPopover(id: NodeId): void {
 function closePopover(): void {
   if (!popoverNode) return;
   popoverNode = null;
+  if (scene) scene.popoverOpen = false;
   element('node-actions').hidden = true;
   if (popoverReturnFocus && popoverReturnFocus !== document.body && popoverReturnFocus.isConnected) popoverReturnFocus.focus();
   else if (document.activeElement instanceof HTMLElement && element('node-actions').contains(document.activeElement)) document.activeElement.blur();
@@ -804,6 +806,18 @@ document.addEventListener('keydown', event => {
   if (active && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) return;
   if (document.querySelector('dialog[open]')) return;
   if (active?.closest('#node-actions')) return;
+  if (event.key.startsWith('Arrow')) {
+    if (!scene) return;
+    event.preventDefault();
+    if (event.key === 'ArrowLeft') scene.rotate(-Math.PI / 6);
+    else if (event.key === 'ArrowRight') scene.rotate(Math.PI / 6);
+    else if (event.key === 'ArrowUp') scene.tilt(-Math.PI / 18);
+    else scene.tilt(Math.PI / 18);
+    return;
+  }
+  if (event.key === '+' || event.key === '=') { scene?.zoom(.8); return; }
+  if (event.key === '-' || event.key === '_') { scene?.zoom(1.25); return; }
+  if (event.key === '0') { scene?.reset(); return; }
   if (event.key === ' ') {
     if (active && (active.tagName === 'BUTTON' || active.tagName === 'A')) return;
     event.preventDefault();
@@ -874,7 +888,7 @@ try {
   scene = new DistrictScene(element('scene-canvas'), element('scene-markers'), activateNode, renderNotice);
 } catch {
   renderNotice('3D view unavailable. You can still play the full incident using the district selector, service status buttons and inspector. WebGL2 is required for the diorama.');
-  for (const id of ['rotate-left', 'rotate-right', 'zoom-in', 'zoom-out', 'reset-camera']) button(id).disabled = true;
+  for (const id of ['rotate-left', 'rotate-right', 'tilt-up', 'tilt-down', 'zoom-in', 'zoom-out', 'reset-camera']) button(id).disabled = true;
 }
 // Loopback-only debug handle for screenshot/verification tooling.
 if (location.hostname === '127.0.0.1' || location.hostname === 'localhost') {
@@ -883,10 +897,12 @@ if (location.hostname === '127.0.0.1' || location.hostname === 'localhost') {
 }
 if (scene) scene.onLightning = () => fireCue('thunder');
 button('reset-camera').addEventListener('click', () => scene?.reset());
-button('rotate-left').addEventListener('click', () => scene?.rotate(-.15));
-button('rotate-right').addEventListener('click', () => scene?.rotate(.15));
-button('zoom-in').addEventListener('click', () => scene?.zoom(.1));
-button('zoom-out').addEventListener('click', () => scene?.zoom(-.1));
+button('rotate-left').addEventListener('click', () => scene?.rotate(-Math.PI / 6));
+button('rotate-right').addEventListener('click', () => scene?.rotate(Math.PI / 6));
+button('tilt-up').addEventListener('click', () => scene?.tilt(-Math.PI / 18));
+button('tilt-down').addEventListener('click', () => scene?.tilt(Math.PI / 18));
+button('zoom-in').addEventListener('click', () => scene?.zoom(.8));
+button('zoom-out').addEventListener('click', () => scene?.zoom(1.25));
 
 function frame(now: number): void {
   if (!document.hidden) {

@@ -632,3 +632,109 @@ test('sound starts on Begin, toggles with M, and cues follow live events only', 
   await page.locator('#cursor').fill('60');
   expect(await cues()).toEqual(beforeReplay);
 });
+
+// Camera control — full orbit, eased commands, zoom-to-cursor, drift gating.
+const cameraState = (page: Page) => page.evaluate(() =>
+  (window as unknown as { __scene: { cameraState(): { theta: number; phi: number; distance: number; target: { x: number; z: number } } } }).__scene.cameraState());
+const fitDistance = (page: Page) => page.evaluate(() => (window as unknown as { __scene: { fittedDistance: number } }).__scene.fittedDistance);
+const settle = (page: Page) => page.waitForTimeout(500); // outlast the ~350 ms ease
+const groundPoint = (page: Page, x: number, z: number) => page.evaluate(([wx, wz]) => {
+  const s = (window as unknown as { __scene: never }).__scene as {
+    camera: { position: { constructor: new (x: number, y: number, z: number) => { project(c: unknown): { x: number; y: number } } } };
+    renderer: { domElement: { getBoundingClientRect(): DOMRect } };
+  };
+  const v = new s.camera.position.constructor(wx!, .45, wz!).project(s.camera);
+  const c = s.renderer.domElement.getBoundingClientRect();
+  return { x: c.left + (v.x + 1) * c.width / 2, y: c.top + (-v.y + 1) * c.height / 2 };
+}, [x, z]);
+
+test('camera orbits a full 360 degrees past the old azimuth clamp', async ({ page }) => {
+  const start = await cameraState(page);
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  for (let i = 0; i < 6; i++) { await page.keyboard.press('ArrowRight'); await settle(page); }
+  const end = await cameraState(page);
+  let delta = Math.abs(end.theta - start.theta) % (Math.PI * 2);
+  delta = Math.min(delta, Math.PI * 2 - delta);
+  expect(delta * 180 / Math.PI).toBeGreaterThanOrEqual(170);
+});
+
+test('zoom clamps between 0.22x and 1.8x the fitted distance', async ({ page }) => {
+  const fit = await fitDistance(page);
+  for (let i = 0; i < 8; i++) {
+    await page.locator('#zoom-in').click();
+    await settle(page);
+    const s = await cameraState(page);
+    expect(s.distance).toBeGreaterThanOrEqual(fit * .215);
+  }
+  expect((await cameraState(page)).distance).toBeLessThanOrEqual(fit * .23);
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  await page.keyboard.press('0');
+  await settle(page);
+  for (let i = 0; i < 4; i++) {
+    await page.locator('#zoom-out').click();
+    await settle(page);
+  }
+  expect((await cameraState(page)).distance).toBeGreaterThanOrEqual(fit * 1.75);
+  expect((await cameraState(page)).distance).toBeLessThanOrEqual(fit * 1.81);
+});
+
+test('tilt clamps at 12 degrees from top-down and 84 degrees at harbour level', async ({ page }) => {
+  for (let i = 0; i < 9; i++) { await page.locator('#tilt-up').click(); await settle(page); }
+  expect((await cameraState(page)).phi).toBeCloseTo(Math.PI / 15, 2); // 12 deg
+  for (let i = 0; i < 9; i++) { await page.locator('#tilt-down').click(); await settle(page); }
+  expect((await cameraState(page)).phi).toBeCloseTo(Math.PI * 84 / 180, 2);
+});
+
+test('reset returns to the fitted view after orbit and zoom', async ({ page }) => {
+  const home = await cameraState(page);
+  await page.locator('#rotate-left').click();
+  await page.locator('#zoom-in').click();
+  await settle(page);
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  await page.keyboard.press('0');
+  await settle(page);
+  const end = await cameraState(page);
+  expect(Math.abs(end.theta - home.theta) * 180 / Math.PI).toBeLessThan(1);
+  expect(Math.abs(end.phi - home.phi) * 180 / Math.PI).toBeLessThan(1);
+  expect(Math.abs(end.distance - home.distance) / home.distance).toBeLessThan(.01);
+});
+
+test('wheel zooms toward the cursor and the target stays on the platform', async ({ page }) => {
+  // Tilt up first: at the default shallow angle OrbitControls' tilt limit pins
+  // the target (the camera still dollies along the cursor ray); past ~70° from
+  // vertical the focus target tracks the cursor too.
+  for (let i = 0; i < 2; i++) { await page.locator('#tilt-up').click(); await settle(page); }
+  const point = await groundPoint(page, 8, -2.5); // apron-side ground by Feeder B
+  const before = await cameraState(page);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.wheel(0, -600);
+  await settle(page);
+  const after = await cameraState(page);
+  expect(after.distance).toBeLessThan(before.distance);
+  expect(after.target.x).toBeGreaterThan(before.target.x); // moved toward Feeder B's side
+  expect(Math.abs(after.target.x)).toBeLessThanOrEqual(11);
+  expect(Math.abs(after.target.z)).toBeLessThanOrEqual(8.5);
+});
+
+test('idle drift stays suppressed after a camera input', async ({ page }) => {
+  await page.locator('#rotate-right').click();
+  await settle(page);
+  const first = (await cameraState(page)).theta;
+  await page.waitForTimeout(3000);
+  expect(Math.abs((await cameraState(page)).theta - first)).toBeLessThan(.005);
+});
+
+test('marker picking still works rotated 180 degrees', async ({ page }) => {
+  for (let i = 0; i < 6; i++) { await page.locator('#rotate-right').click(); await settle(page); }
+  await clickMarker(page, 'feeder-a');
+  await expect(page.locator('#node-actions')).toBeVisible();
+  await expect(page.locator('#popover-title')).toHaveText('Feeder A');
+});
+
+test('camera commands apply instantly under reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const before = (await cameraState(page)).theta;
+  await page.locator('#rotate-left').click();
+  await page.waitForTimeout(80);
+  expect(Math.abs((await cameraState(page)).theta - before)).toBeCloseTo(Math.PI / 6, 2);
+});

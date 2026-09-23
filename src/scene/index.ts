@@ -51,7 +51,6 @@ export class DistrictScene {
   private rain: THREE.Points | null = null;
   private rainPositions: THREE.BufferAttribute | null = null;
   private rainMaterial: THREE.PointsMaterial | null = null;
-  private targetGoal = BASE_TARGET.clone();
   private driftTheta = 0;
   private fitted = false;
   private lastPhase = '';
@@ -71,6 +70,18 @@ export class DistrictScene {
   private onNotice: (message: string) => void;
   private rainLevel = 0;
   onLightning?: () => void;
+  // Camera command layer: eased one-shot animations instead of a persistent
+  // target lerp, so user input never fights a goal. lastCameraInput gates the
+  // idle drift and the restoration pull-back.
+  private cameraAnim: {
+    t0: number; ms: number;
+    from: { theta: number; phi: number; distance: number; target: THREE.Vector3 };
+    to: { theta: number; phi: number; distance: number; target: THREE.Vector3 };
+  } | null = null;
+  private lastCameraInput = 0;
+  private fitDistance = 34;
+  private homePose: { theta: number; phi: number; distance: number; target: THREE.Vector3 } | null = null;
+  popoverOpen = false;
 
   constructor(canvasHost: HTMLElement, markerHost: HTMLElement, onSelect: (id: NodeId) => void, onNotice: (message: string) => void) {
     this.canvasHost = canvasHost;
@@ -89,18 +100,21 @@ export class DistrictScene {
     this.camera.position.copy(this.initialCamera);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.copy(BASE_TARGET);
-    this.controls.enablePan = false;
+    // Full 360° orbit. Polar runs near top-down to low harbour level; the far
+    // end tightens smoothly at close range (see maxPolarFor) so the camera
+    // cannot sink into buildings. Pan is ground-plane, target clamped each frame.
+    this.controls.enablePan = true;
+    this.controls.screenSpacePanning = false;
+    this.controls.zoomToCursor = true;
+    this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     this.controls.enableDamping = !this.reduced.matches;
     this.controls.dampingFactor = .1;
-    // Orbit bounds ~8-42 deg of platform-relative elevation; the default view sits
-    // near the shallow end so the horizon stays in frame.
-    this.controls.minPolarAngle = THREE.MathUtils.degToRad(32);
-    this.controls.maxPolarAngle = THREE.MathUtils.degToRad(81);
-    const angle = Math.atan2(this.initialCamera.x, this.initialCamera.z - BASE_TARGET.z);
-    this.controls.minAzimuthAngle = angle - THREE.MathUtils.degToRad(35);
-    this.controls.maxAzimuthAngle = angle + THREE.MathUtils.degToRad(35);
+    this.controls.minPolarAngle = THREE.MathUtils.degToRad(12);
+    this.controls.maxPolarAngle = THREE.MathUtils.degToRad(84);
     this.controls.minDistance = 24;
     this.controls.maxDistance = 52;
+    this.controls.addEventListener('start', this.noteCameraInput);
+    this.renderer.domElement.addEventListener('wheel', this.noteCameraInput, { passive: true });
     this.controls.update();
     this.controls.saveState();
     this.sky = new SkyRig(this.ctx);
@@ -134,6 +148,7 @@ export class DistrictScene {
     this.fleet = new Fleet(this.ctx, this.lights);
     this.renderer.domElement.addEventListener('pointerdown', this.pointerDown);
     this.renderer.domElement.addEventListener('pointerup', this.pointerUp);
+    this.renderer.domElement.addEventListener('dblclick', this.doubleClick);
     this.renderer.domElement.addEventListener('webglcontextlost', this.lost);
     this.renderer.domElement.addEventListener('webglcontextrestored', this.restored);
     this.reduced.addEventListener('change', this.motionChange);
@@ -229,7 +244,6 @@ export class DistrictScene {
   update(state: State, selected: NodeId): void {
     const [x, z] = POSITIONS[selected];
     this.selection.position.set(x, .53, z);
-    this.targetGoal.set(x * .15, BASE_TARGET.y, -.2 + z * .15);
     const available = capacity(state);
     const headroom = available - connectedLoad(state);
     const current = phase(state);
@@ -317,8 +331,11 @@ export class DistrictScene {
     this.cine.update(dt);
     this.canvasHost.dataset.cinematic = this.cine.playing ? 'playing' : 'done';
     if (this.cine.consumeFlash()) this.sky.triggerFlash(now);
-    // Idle drift + selected-node target easing + restored pull-back.
-    if (!reduced) {
+    // Idle drift (only after 20 s without camera input, never over an open
+    // popover) + restored pull-back (skipped if the camera moved in the last
+    // 10 s). Neither runs while a camera command animation is in flight.
+    const nowMs = performance.now();
+    if (!this.cameraAnim && !reduced && !this.popoverOpen && nowMs - this.lastCameraInput > 20000) {
       const drift = Math.sin(now * Math.PI / 10) * THREE.MathUtils.degToRad(.8);
       const delta = drift - this.driftTheta;
       this.driftTheta = drift;
@@ -328,7 +345,7 @@ export class DistrictScene {
         this.camera.position.copy(this.controls.target).add(offset);
       }
     }
-    const step = this.cine.pullbackStep(dt);
+    const step = !this.cameraAnim && nowMs - this.lastCameraInput > 10000 ? this.cine.pullbackStep(dt) : null;
     if (step) {
       const offset = this.camera.position.clone().sub(this.controls.target);
       offset.multiplyScalar(step.dolly);
@@ -336,8 +353,40 @@ export class DistrictScene {
       spherical.phi = THREE.MathUtils.clamp(spherical.phi - step.polar, this.controls.minPolarAngle, this.controls.maxPolarAngle);
       this.camera.position.copy(new THREE.Vector3().setFromSpherical(spherical).add(this.controls.target));
     }
-    this.controls.target.lerp(this.targetGoal, reduced ? 1 : Math.min(1, dt * 3));
+    // One-shot eased camera commands (rotate/tilt/zoom/focus/reset). A new
+    // command or any OrbitControls input replaces the in-flight animation.
+    if (this.cameraAnim) {
+      const k = Math.min(1, (nowMs - this.cameraAnim.t0) / this.cameraAnim.ms);
+      const e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      const { from, to } = this.cameraAnim;
+      this.controls.target.lerpVectors(from.target, to.target, e);
+      const offset = new THREE.Vector3().setFromSphericalCoords(
+        from.distance + (to.distance - from.distance) * e,
+        from.phi + (to.phi - from.phi) * e,
+        from.theta + (to.theta - from.theta) * e,
+      );
+      this.camera.position.copy(this.controls.target).add(offset);
+      if (k >= 1) {
+        this.cameraAnim = null;
+        this.controls.enableDamping = !reduced;
+      }
+    }
+    // Close range pulls the polar ceiling smoothly toward 62° so the camera
+    // can't sink into buildings; full 84° only at the fitted distance+.
+    const distance = this.camera.position.distanceTo(this.controls.target);
+    this.controls.maxPolarAngle = this.maxPolarFor(distance);
     this.controls.update();
+    // Keep the pan target on the platform at deck height — shift the camera by
+    // the same delta so the view doesn't jump when the clamp bites.
+    const target = this.controls.target;
+    const cx = THREE.MathUtils.clamp(target.x, -11, 11);
+    const cz = THREE.MathUtils.clamp(target.z, -8.5, 8.5);
+    if (cx !== target.x || cz !== target.z || target.y !== BASE_TARGET.y) {
+      this.camera.position.x += cx - target.x;
+      this.camera.position.y += BASE_TARGET.y - target.y;
+      this.camera.position.z += cz - target.z;
+      target.set(cx, BASE_TARGET.y, cz);
+    }
     // Windows + artificial lights resolve cinematic overrides.
     const statusOf = (id: ServiceId): ServiceLight => this.resolvedStatus(state, id);
     for (const id of SERVICE_IDS) this.district.windows.note(id, statusOf(id), now);
@@ -445,20 +494,75 @@ export class DistrictScene {
   get rainDensity(): number { return this.rainLevel; }
   get stormLevel(): number { return this.sky.coverage; }
 
-  reset(): void { this.controls.reset(); }
-  zoom(delta: number): void {
-    const offset = this.camera.position.clone().sub(this.controls.target);
-    const length = THREE.MathUtils.clamp(offset.length() * (1 - delta), this.controls.minDistance, this.controls.maxDistance);
-    this.camera.position.copy(this.controls.target).add(offset.setLength(length));
-    this.controls.update();
+  // Camera commands — every entry routes through animateTo so input eases
+  // (~350 ms) and a new command replaces the in-flight one. Reduced motion
+  // applies each step instantly.
+  reset(): void {
+    if (this.homePose) this.animateTo({ ...this.homePose, target: this.homePose.target.clone() });
+    else this.controls.reset();
   }
-  rotate(delta: number): void {
-    const offset = this.camera.position.clone().sub(this.controls.target);
-    const spherical = new THREE.Spherical().setFromVector3(offset);
-    spherical.theta = THREE.MathUtils.clamp(spherical.theta + delta, this.controls.minAzimuthAngle, this.controls.maxAzimuthAngle);
-    this.camera.position.copy(new THREE.Vector3().setFromSpherical(spherical).add(this.controls.target));
-    this.controls.update();
+  rotate(delta: number): void { this.animateTo({ theta: this.currentSpherical().theta + delta }); }
+  tilt(delta: number): void { this.animateTo({ phi: this.currentSpherical().phi + delta }); }
+  zoom(factor: number): void { this.animateTo({ distance: this.currentSpherical().distance * factor }); }
+  focus(point: THREE.Vector3): void { this.animateTo({ target: point, distance: this.fitDistance * .45 }); }
+
+  // Read-only snapshot for verification tooling (loopback __scene handle).
+  cameraState(): { theta: number; phi: number; distance: number; target: { x: number; z: number } } {
+    const s = this.currentSpherical();
+    return { ...s, target: { x: this.controls.target.x, z: this.controls.target.z } };
   }
+  get fittedDistance(): number { return this.fitDistance; }
+
+  private currentSpherical(): { theta: number; phi: number; distance: number } {
+    const s = new THREE.Spherical().setFromVector3(this.camera.position.clone().sub(this.controls.target));
+    return { theta: s.theta, phi: s.phi, distance: s.radius };
+  }
+
+  // Dynamic polar ceiling: 84° at/above the fitted distance, tightening to
+  // 62° at closest zoom so the camera stays above rooftop level.
+  private maxPolarFor(distance: number): number {
+    const t = THREE.MathUtils.clamp((distance - this.controls.minDistance) / (this.fitDistance - this.controls.minDistance), 0, 1);
+    return THREE.MathUtils.lerp(THREE.MathUtils.degToRad(62), THREE.MathUtils.degToRad(84), t);
+  }
+
+  private animateTo(goal: { theta?: number; phi?: number; distance?: number; target?: THREE.Vector3 }, ms = 350): void {
+    // Flush any residual drag inertia before sampling the start pose.
+    this.controls.enableDamping = false;
+    this.controls.update();
+    const from = { ...this.currentSpherical(), target: this.controls.target.clone() };
+    const to = {
+      theta: goal.theta ?? from.theta,
+      phi: goal.phi ?? from.phi,
+      distance: goal.distance ?? from.distance,
+      target: (goal.target ?? from.target).clone(),
+    };
+    to.distance = THREE.MathUtils.clamp(to.distance, this.controls.minDistance, this.controls.maxDistance);
+    to.phi = THREE.MathUtils.clamp(to.phi, this.controls.minPolarAngle, this.maxPolarFor(to.distance));
+    to.target.set(THREE.MathUtils.clamp(to.target.x, -11, 11), BASE_TARGET.y, THREE.MathUtils.clamp(to.target.z, -8.5, 8.5));
+    while (to.theta - from.theta > Math.PI) to.theta -= Math.PI * 2;
+    while (to.theta - from.theta < -Math.PI) to.theta += Math.PI * 2;
+    this.lastCameraInput = performance.now();
+    if (this.reduced.matches || ms <= 0) {
+      this.cameraAnim = null;
+      this.applyCameraPose(to.theta, to.phi, to.distance, to.target);
+      this.controls.update();
+      return;
+    }
+    this.cameraAnim = { t0: performance.now(), ms, from, to };
+  }
+
+  private applyCameraPose(theta: number, phi: number, distance: number, target: THREE.Vector3): void {
+    this.controls.target.copy(target);
+    this.camera.position.copy(target).add(new THREE.Vector3().setFromSphericalCoords(distance, phi, theta));
+  }
+
+  private noteCameraInput = (): void => {
+    this.lastCameraInput = performance.now();
+    if (this.cameraAnim) {
+      this.cameraAnim = null;
+      this.controls.enableDamping = !this.reduced.matches;
+    }
+  };
   metrics(): string {
     return `${this.renderer.info.render.calls} draw calls · ${this.renderer.info.render.triangles.toLocaleString()} triangles · DPR ${this.renderer.getPixelRatio()} · quality tier ${this.qualityTier} · reduced motion ${this.reduced.matches ? 'on' : 'off'}`;
   }
@@ -490,11 +594,13 @@ export class DistrictScene {
         if (widthAt(mid) > .72) lo = mid; else hi = mid;
       }
       const fit = hi;
+      this.fitDistance = fit;
       this.camera.position.copy(this.controls.target).add(dir.multiplyScalar(fit));
-      this.controls.minDistance = fit * .55;
-      this.controls.maxDistance = fit * 1.7;
+      this.controls.minDistance = fit * .22;
+      this.controls.maxDistance = fit * 1.8;
       this.controls.update();
       this.controls.saveState();
+      this.homePose = { ...this.currentSpherical(), target: this.controls.target.clone() };
     }
     this.renderer.setSize(this.dimensions.width, this.dimensions.height);
     this.post?.setSize(this.dimensions.width, this.dimensions.height);
@@ -510,6 +616,18 @@ export class DistrictScene {
     ray.setFromCamera(mouse, this.camera);
     const hit = ray.intersectObjects([...this.district.nodes.values()], true)[0];
     if (hit) this.onSelect(hit.object.userData.node as NodeId);
+  };
+  // Double-click eases the view to the picked point: node surface if one is
+  // hit, otherwise the deck plane under the cursor.
+  private doubleClick = (event: MouseEvent): void => {
+    if (this.cine.playing) return;
+    const bounds = this.renderer.domElement.getBoundingClientRect();
+    const mouse = new THREE.Vector2((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(mouse, this.camera);
+    const hit = ray.intersectObjects([...this.district.nodes.values()], true)[0];
+    const point = hit?.point ?? ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -.44), new THREE.Vector3());
+    if (point) this.focus(point);
   };
   private lost = (event: Event): void => { event.preventDefault(); this.contextLost = true; this.onNotice('3D view interrupted. All district controls still work below. Waiting for WebGL recovery.'); };
   private restored = (): void => { this.contextLost = false; this.onNotice(''); };
@@ -540,6 +658,8 @@ export class DistrictScene {
     this.reduced.removeEventListener('change', this.motionChange);
     this.renderer.domElement.removeEventListener('pointerdown', this.pointerDown);
     this.renderer.domElement.removeEventListener('pointerup', this.pointerUp);
+    this.renderer.domElement.removeEventListener('dblclick', this.doubleClick);
+    this.renderer.domElement.removeEventListener('wheel', this.noteCameraInput);
     this.renderer.domElement.removeEventListener('webglcontextlost', this.lost);
     this.renderer.domElement.removeEventListener('webglcontextrestored', this.restored);
     this.clearDependencies();

@@ -144,6 +144,19 @@ Cause: Crew 1's depot exit ran diagonally through Crew 2's parked bay, and both 
 - **Yielding**: each truck's shown position trails its schedule position along its route, moving at up to 1.6× its nominal speed. A truck holds whenever its next pose would overlap another moving truck's footprint (length + clearance margin). The truck that departed earlier has right of way; on a tie, the lower crew number goes first. A truck that is still catching up on arrival finishes the drive before its boom rises. In replay, after a time jump (Next event, scrubbing) or under reduced motion, trucks snap to their schedule pose.
 - The route and yield logic is a pure module with no three.js import, so the Node test suite can simulate every dispatch order and delay and assert that no footprints ever overlap.
 
+### Camera control (Mark, September 23 — "rotate and zoom better")
+
+Before this change: azimuth was limited to ±35° around the default, polar angle to 32–81°, and distance to 0.55–1.7× the fitted distance. Pan was disabled, zoom always targeted the district centre, clicking a rotate button jumped 8.6° with no easing, and the idle drift plus selection easing fought user input. Supersedes the "bounded orbit/zoom" and "idle drift" notes under Rendering.
+
+- **Orbit**: full 360° azimuth. Polar angle 12°–84° (near top-down to low harbour level). At close range the maximum polar angle tightens smoothly to 62°, so the camera can't sink into buildings.
+- **Zoom**: 0.22× to 1.8× the fitted distance. Mouse wheel and trackpad pinch zoom **toward the cursor** (OrbitControls `zoomToCursor`).
+- **Pan**: right-drag, Shift+drag, or a two-finger drag. The target is clamped to the platform (|x| ≤ 11, |z| ≤ 8.5) and its height stays fixed.
+- **Focus**: double-clicking a point on the district eases the target to that point and closes in to about 0.45× the fitted distance.
+- **Buttons**: rotate ±30°, tilt up/down 10°, zoom in/out 20%, and Reset view. All ease over about 350 ms; reduced motion makes each step instant.
+- **Keys**: ←/→ rotate, ↑/↓ tilt, +/= and − zoom, 0 resets the view. All are ignored while typing in inputs or selects, and while a dialog is open. List them in the keys hint and Diagnostics.
+- **No fighting the player**: any user camera input cancels in-flight camera animations. Idle drift runs only after 20 s without camera input, never while a popover is open, and never under reduced motion. Selecting a node no longer moves the camera. The restoration pull-back is skipped if the player moved the camera in the previous 10 s.
+- Markers, the popover, ring labels and raycast picking follow the camera from every allowed angle.
+
 ### Art (buildings, trees, quay, boat, cars)
 
 - Buildings: parapet/cornice caps, stepped massing, framed windows (inset with sill and lintel, instanced), ground-floor entrances with doors and awnings/canopies, drainpipes, rooftop clutter (HVAC boxes, vents, water tank on housing, antenna). Clinic: entrance canopy with a lit cross sign and a visible generator unit with exhaust stack. Pumping station: pipework and a tank. Lighthouse: gallery railing and glazed lantern room. A distant fog-faded shoreline with a few lit windows across the water (decoration, not nodes), which also softens the horizon band.
