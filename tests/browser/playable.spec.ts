@@ -23,12 +23,36 @@ const ensureRunning = async (page: Page) => {
   if ((await page.locator('#mode').textContent()) !== 'RUNNING') await page.locator('#play').click();
   await expect(page.locator('#mode')).toHaveText('RUNNING');
 };
+const simTick = async (page: Page) => {
+  const [minutes, seconds] = (await page.locator('#time').textContent())!.split(':').map(Number);
+  return minutes * 60 + seconds;
+};
+const simText = (ticks: number) => `${Math.floor(ticks / 60).toString().padStart(2, '0')}:${Math.floor(ticks % 60).toString().padStart(2, '0')}`;
+const durationText = (ticks: number) => `${Math.floor(ticks / 60)}h ${Math.floor(ticks % 60).toString().padStart(2, '0')}m`;
+const worldText = (ticks: number) => {
+  const minutes = (((19 * 60 + 30 + ticks) % 1440) + 1440) % 1440;
+  return `${Math.floor(minutes / 60).toString().padStart(2, '0')}:${Math.floor(minutes % 60).toString().padStart(2, '0')}`;
+};
+// Time now starts on the first dispatch, so Crew 2 can be sent a few ticks after
+// 0 — its arrival inserts an extra next-event step before Feeder A completes.
+const advanceTo = async (page: Page, tick: number) => {
+  for (let n = 0; n < 12 && (await simTick(page)) < tick; n++) await page.locator('#next-event').click();
+  await expect(page.locator('#time')).toHaveText(simText(tick));
+};
+// Crew 2's dispatch tick from the event log — Feeder B timing keys off it, and
+// a paused second dispatch resumes the clock, so the tick can't be read from #time.
+const crew2DispatchTick = async (page: Page) => {
+  const ticks = await page.locator('#events li').evaluateAll(items =>
+    items.map(item => ({ tick: Number((item as HTMLElement).dataset.tick), text: item.textContent ?? '' })));
+  return ticks.find(event => event.text.includes('Crew 2 dispatched'))?.tick ?? 0;
+};
+// Returns Crew 2's dispatch tick so callers can compute Feeder B timing.
 const dispatchBoth = async (page: Page) => {
   await page.locator('#speed').selectOption('1');
   await sendCrew(page, 'feeder-a', 'crew-1');
-  await ensurePaused(page);
   await sendCrew(page, 'feeder-b', 'crew-2');
   await ensurePaused(page);
+  return crew2DispatchTick(page);
 };
 const dispatchBothInspector = async (page: Page) => {
   await page.locator('#speed').selectOption('1');
@@ -38,6 +62,7 @@ const dispatchBothInspector = async (page: Page) => {
   await inspect(page, 'feeder-b');
   await page.locator('#dispatch-2').click();
   await ensurePaused(page);
+  return crew2DispatchTick(page);
 };
 const reconnect = async (page: Page, id: string) => {
   await inspect(page, id);
@@ -83,26 +108,48 @@ test('initial state, working WebGL and no external runtime requests', async ({ p
   await page.screenshot({ path: info.outputPath('desktop-initial.png'), fullPage: true });
 });
 
-test('clicking a feeder marker opens the action popover; time starts when both crews are out', async ({ page }) => {
+test('clicking a feeder marker opens the action popover; time starts on the first dispatch', async ({ page }) => {
   await clickMarker(page, 'feeder-a');
   await expect(page.locator('#node-actions')).toBeVisible();
   await expect(page.locator('#node-actions')).toContainText('Feeder A');
   await expect(page.locator('#node-actions [data-crew="crew-1"]')).toHaveText('Send Crew 1');
   await page.locator('#node-actions [data-crew="crew-1"]').click();
   await expect(page.locator('#events li')).toHaveCount(2);
-  await expect(page.locator('#mode')).toHaveText('PAUSED');
-  await expect(page.locator('#task-banner')).toContainText('press Space');
-  await page.keyboard.press('Escape');
-  await clickMarker(page, 'feeder-b');
+  await expect(page.locator('#mode')).toHaveText('RUNNING');
+  await expect(page.locator('#task-banner')).toContainText('the longer it waits');
+  // The remaining faulted feeder's popover opens with the idle crew focused.
+  await expect(page.locator('#node-actions')).toContainText('Feeder B');
+  await expect(page.locator('#node-actions [data-crew="crew-2"]')).toBeFocused();
   await page.locator('#node-actions [data-crew="crew-2"]').click();
   await expect(page.locator('#mode')).toHaveText('RUNNING');
 });
 
+test('the first dispatch starts the clock and offers the remaining feeder', async ({ page }) => {
+  await clickMarker(page, 'feeder-a');
+  await page.locator('#node-actions [data-crew="crew-1"]').click();
+  await expect(page.locator('#mode')).toHaveText('RUNNING', { timeout: 1000 });
+  await expect(page.locator('#world-time')).not.toContainText('19:30', { timeout: 10000 });
+  await expect(page.locator('#node-actions')).toContainText('Feeder B');
+  await expect(page.locator('#node-actions [data-crew="crew-2"]')).toBeFocused();
+});
+
+test('a lone dispatched crew keeps moving while the other waits', async ({ page }) => {
+  await sendCrew(page, 'feeder-a', 'crew-1');
+  await expect(page.locator('#mode')).toHaveText('RUNNING');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#node-actions')).toBeHidden();
+  await page.waitForTimeout(3000);
+  const estimate = await page.locator('#crews [data-crew="crew-1"] .crew-state').textContent();
+  const match = estimate!.match(/(\d+)h (\d+)m/);
+  expect(match).not.toBeNull();
+  expect(Number(match![1]) * 60 + Number(match![2])).toBeLessThan(60);
+});
+
 for (const priority of ['clinic', 'housing']) {
   test(`complete ${priority} strategy matches the numeric oracle`, async ({ page }, info) => {
-    await dispatchBoth(page);
+    const delayB = await dispatchBoth(page);
     await next(page, '01:00');
-    await next(page, '04:00');
+    await advanceTo(page, 240);
     await expect(page.locator('#capacity')).toHaveText('6');
     await expect(page.locator('#load')).toHaveText('0');
     for (const id of priority === 'clinic' ? ['clinic', 'pump'] : ['housing-a', 'housing-b']) await reconnect(page, id);
@@ -111,16 +158,16 @@ for (const priority of ['clinic', 'housing']) {
       await next(page, '06:00');
       await expect(page.locator('[data-service="clinic"] .service-state')).toHaveText('Offline');
     }
-    await next(page, '08:00');
+    await advanceTo(page, 480 + delayB);
     await expect(page.locator('#capacity')).toHaveText('13');
     await expect(page.locator('#load')).toHaveText('6');
     for (const id of priority === 'clinic' ? ['housing-a', 'housing-b', 'beacon'] : ['clinic', 'pump', 'beacon']) await reconnect(page, id);
     await expect(page.locator('#load')).toHaveText('13');
-    await expect(downtime(page, 'clinic')).toHaveText(priority === 'clinic' ? 'Out 0h 00m' : 'Out 2h 00m');
-    await expect(downtime(page, 'housing-a')).toHaveText(priority === 'clinic' ? 'Out 8h 00m' : 'Out 4h 00m');
-    await expect(downtime(page, 'housing-b')).toHaveText(priority === 'clinic' ? 'Out 8h 00m' : 'Out 4h 00m');
-    await expect(downtime(page, 'pump')).toHaveText(priority === 'clinic' ? 'Out 4h 00m' : 'Out 8h 00m');
-    await expect(downtime(page, 'beacon')).toHaveText('Out 8h 00m');
+    await expect(downtime(page, 'clinic')).toHaveText(priority === 'clinic' ? 'Out 0h 00m' : `Out ${durationText(120 + delayB)}`);
+    await expect(downtime(page, 'housing-a')).toHaveText(priority === 'clinic' ? `Out ${durationText(480 + delayB)}` : 'Out 4h 00m');
+    await expect(downtime(page, 'housing-b')).toHaveText(priority === 'clinic' ? `Out ${durationText(480 + delayB)}` : 'Out 4h 00m');
+    await expect(downtime(page, 'pump')).toHaveText(priority === 'clinic' ? 'Out 4h 00m' : `Out ${durationText(480 + delayB)}`);
+    await expect(downtime(page, 'beacon')).toHaveText(`Out ${durationText(480 + delayB)}`);
     await expect(page.locator('[data-state="grid"]')).toHaveCount(5);
     await expect(page.locator('#summary')).toBeVisible();
     await page.screenshot({ path: info.outputPath(`${priority}-restored.png`), fullPage: true });
@@ -133,7 +180,7 @@ test('capacity failures are feedback, never history; disconnect reallocates expl
   await expect(page.locator('#events li')).toHaveCount(1);
   await dispatchBoth(page);
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await reconnect(page, 'clinic');
   await reconnect(page, 'pump');
   const eventCount = await page.locator('#events li').count();
@@ -154,7 +201,7 @@ test('capacity failures are feedback, never history; disconnect reallocates expl
 test('rejected reconnection explains the shortfall inside the popover', async ({ page }) => {
   await dispatchBoth(page);
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await reconnectPopover(page, 'clinic');
   await reconnectPopover(page, 'pump');
   await clickMarker(page, 'housing-a');
@@ -171,13 +218,14 @@ test('cinematic plays on Begin, world clock tracks sim time and sunrise ends at 
   await ensurePaused(page);
   await sendCrew(page, 'feeder-b', 'crew-2');
   await ensurePaused(page);
+  const delayB = await crew2DispatchTick(page);
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await expect(page.locator('#world-time')).toContainText('23:30');
   await reconnect(page, 'clinic');
   await reconnect(page, 'pump');
-  await next(page, '08:00');
-  await expect(page.locator('#world-time')).toContainText('03:30');
+  await advanceTo(page, 480 + delayB);
+  await expect(page.locator('#world-time')).toContainText(worldText(480 + delayB));
   for (const id of ['housing-a', 'housing-b', 'beacon']) await reconnect(page, id);
   await expect(page.locator('#summary')).toBeVisible();
   await page.locator('#sunrise').click();
@@ -192,8 +240,9 @@ test('auto-pause at repair completions and restored run summary', async ({ page 
   test.setTimeout(90000);
   await page.locator('#speed').selectOption('1');
   await sendCrew(page, 'feeder-a', 'crew-1');
-  await expect(page.locator('#mode')).toHaveText('PAUSED');
+  await expect(page.locator('#mode')).toHaveText('RUNNING');
   await sendCrew(page, 'feeder-b', 'crew-2');
+  const delayB = await crew2DispatchTick(page);
   await page.locator('#speed').selectOption('30');
   await ensureRunning(page);
   await expect(page.locator('#time')).toHaveText('04:00', { timeout: 20000 });
@@ -203,7 +252,7 @@ test('auto-pause at repair completions and restored run summary', async ({ page 
   await reconnectPopover(page, 'pump');
   await expect(page.locator('#load')).toHaveText('6');
   await page.locator('#resume').click();
-  await expect(page.locator('#time')).toHaveText('08:00', { timeout: 20000 });
+  await expect(page.locator('#time')).toHaveText(simText(480 + delayB), { timeout: 20000 });
   await expect(page.locator('#mode')).toHaveText('PAUSED');
   await expect(page.locator('#decision')).toContainText('13 units online');
   for (const id of ['housing-a', 'housing-b', 'beacon']) await reconnectPopover(page, id);
@@ -211,10 +260,10 @@ test('auto-pause at repair completions and restored run summary', async ({ page 
   await expect(page.locator('#decision')).toContainText('All services restored');
   await expect(page.locator('#resume')).toHaveText('View summary');
   await expect(summaryDowntime(page, 'clinic')).toHaveText('0h 00m');
-  await expect(summaryDowntime(page, 'housing-a')).toHaveText('8h 00m');
-  await expect(summaryDowntime(page, 'housing-b')).toHaveText('8h 00m');
+  await expect(summaryDowntime(page, 'housing-a')).toHaveText(durationText(480 + delayB));
+  await expect(summaryDowntime(page, 'housing-b')).toHaveText(durationText(480 + delayB));
   await expect(summaryDowntime(page, 'pump')).toHaveText('4h 00m');
-  await expect(summaryDowntime(page, 'beacon')).toHaveText('8h 00m');
+  await expect(summaryDowntime(page, 'beacon')).toHaveText(durationText(480 + delayB));
   await expect(page.locator('#summary')).toContainText('backup remaining 2h 00m');
 });
 
@@ -224,6 +273,7 @@ test('clinic backup warning and expiry auto-pause on a housing-first run', async
   await sendCrew(page, 'feeder-a', 'crew-1');
   await ensurePaused(page);
   await sendCrew(page, 'feeder-b', 'crew-2');
+  const delayB = await crew2DispatchTick(page);
   await page.locator('#speed').selectOption('30');
   await ensureRunning(page);
   await expect(page.locator('#time')).toHaveText('04:00', { timeout: 20000 });
@@ -238,7 +288,7 @@ test('clinic backup warning and expiry auto-pause on a housing-first run', async
   await expect(page.locator('#mode')).toHaveText('PAUSED');
   await expect(page.locator('#decision')).toContainText('gone dark');
   await page.locator('#resume').click();
-  await expect(page.locator('#time')).toHaveText('08:00', { timeout: 20000 });
+  await expect(page.locator('#time')).toHaveText(simText(480 + delayB), { timeout: 20000 });
   await expect(page.locator('#decision')).toContainText('13 units online');
 });
 
@@ -249,13 +299,14 @@ test('try a different order resets without a dialog and compares session runs', 
     await sendCrew(page, 'feeder-a', 'crew-1');
     await ensurePaused(page);
     await sendCrew(page, 'feeder-b', 'crew-2');
+    const delayB = await crew2DispatchTick(page);
     await page.locator('#speed').selectOption('30');
     await ensureRunning(page);
     await expect(page.locator('#time')).toHaveText('04:00', { timeout: 20000 });
     await reconnectPopover(page, 'clinic');
     await reconnectPopover(page, 'pump');
     await page.locator('#resume').click();
-    await expect(page.locator('#time')).toHaveText('08:00', { timeout: 20000 });
+    await expect(page.locator('#time')).toHaveText(simText(480 + delayB), { timeout: 20000 });
     for (const id of ['housing-a', 'housing-b', 'beacon']) await reconnectPopover(page, id);
     await expect(page.locator('#summary')).toBeVisible();
   };
@@ -275,10 +326,9 @@ test('try a different order resets without a dialog and compares session runs', 
 test('keyboard shortcuts: space toggles time, digits select, Escape closes the popover', async ({ page }) => {
   await page.locator('#speed').selectOption('1');
   await sendCrew(page, 'feeder-a', 'crew-1');
-  await expect(page.locator('#mode')).toHaveText('PAUSED');
-  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
-  await page.keyboard.press('Space');
   await expect(page.locator('#mode')).toHaveText('RUNNING');
+  // Blur first: the auto-opened Feeder B popover focuses Send Crew 2, which Space would click.
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
   await page.keyboard.press('Space');
   await expect(page.locator('#mode')).toHaveText('PAUSED');
   await page.keyboard.press('Space');
@@ -319,12 +369,12 @@ test('guidance overlay sits inside the top of the scene', async ({ page }) => {
 });
 
 test('replay restores matching lights and past history without mutating live run', async ({ page }) => {
-  await dispatchBoth(page);
+  const delayB = await dispatchBoth(page);
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await reconnect(page, 'clinic');
   await reconnect(page, 'pump');
-  await next(page, '08:00');
+  await advanceTo(page, 480 + delayB);
   const history = await page.locator('#events').textContent();
   await page.locator('#replay').click();
   await expect(page.locator('#mode')).toHaveText('REPLAY');
@@ -338,10 +388,10 @@ test('replay restores matching lights and past history without mutating live run
   await page.locator('#cursor').fill('240');
   await expect(page.locator('#load')).toHaveText('6');
   await expect(page.locator('#node-status')).toHaveText('Grid powered');
-  await page.locator('#cursor').fill('480');
+  await page.locator('#cursor').fill(String(480 + delayB));
   expect(await page.locator('#events').textContent()).toBe(history);
   await page.locator('#return-live').click();
-  await expect(page.locator('#time')).toHaveText('08:00');
+  await expect(page.locator('#time')).toHaveText(simText(480 + delayB));
   await expect(page.locator('#load')).toHaveText('6');
   expect(await page.locator('#events').textContent()).toBe(history);
 });
@@ -416,9 +466,13 @@ test('keyboard-only full restoration using native buttons preserves focus across
   await expect(page.locator('#inspector-title')).toHaveText('Feeder A');
   await expect(page.locator('#node-actions')).toBeVisible();
   await activate('#node-actions [data-crew="crew-1"]');
-  await expect(page.locator('#mode')).toHaveText('PAUSED');
+  await expect(page.locator('#mode')).toHaveText('RUNNING');
   await activate('#inspect-b');
-  await activate('#node-actions [data-crew="crew-2"]');
+  // The auto-opened Feeder B popover focuses Send Crew 2 — Enter dispatches it.
+  await expect(page.locator('#node-actions [data-crew="crew-2"]')).toBeFocused();
+  const sent = async () => (await page.locator('#crews [data-crew="crew-2"] .crew-state').textContent())!.includes('Feeder B');
+  for (let n = 0; n < 10 && !(await sent()); n++) await page.keyboard.press('Enter');
+  expect(await sent()).toBe(true);
   if ((await page.locator('#mode').textContent()) === 'RUNNING') await activate('#play');
   await nextUntil('#capacity', '6');
   for (const id of ['clinic', 'pump']) {
@@ -472,7 +526,7 @@ test('WebGL failure and unavailable storage leave the HTML game usable', async (
   await expect(page.locator('#render-notice')).toContainText('3D view unavailable');
   await dispatchBothInspector(page);
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await reconnect(page, 'clinic');
   await expect(page.locator('#load')).toHaveText('4');
   await expect(page.locator('#node-status')).toHaveText('Grid powered');
@@ -488,7 +542,7 @@ test('WebGL context loss recovers without resetting state', async ({ page }) => 
     extension.loseContext();
   });
   await expect(page.locator('#render-notice')).toContainText('3D view interrupted');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await reconnect(page, 'clinic');
   await page.evaluate(() => (window as unknown as { restoreGraphics: () => void }).restoreGraphics());
   await expect(page.locator('#render-notice')).toBeHidden();
@@ -498,12 +552,12 @@ test('WebGL context loss recovers without resetting state', async ({ page }) => 
 
 test('reduced motion completes the incident with no decorative animation', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await dispatchBoth(page);
+  const delayB = await dispatchBoth(page);
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await reconnect(page, 'clinic');
   await reconnect(page, 'pump');
-  await next(page, '08:00');
+  await advanceTo(page, 480 + delayB);
   for (const id of ['housing-a', 'housing-b', 'beacon']) await reconnect(page, id);
   await expect(page.locator('#load')).toHaveText('13');
   await expect(page.locator('#summary')).toBeVisible();
@@ -540,15 +594,15 @@ test('briefing states the stakes and the generator deadline', async ({ page }) =
 
 test('parallel dispatch decision quotes real ETAs and the header hides sim time', async ({ page }) => {
   test.setTimeout(60000);
-  await dispatchBoth(page);
+  const delayB = await dispatchBoth(page);
   expect(await page.locator('#task-banner').textContent()).not.toMatch(/\b\d\d:\d\d \(estimates?\)/);
   await expect(page.locator('.masthead time')).toHaveCount(1);
   await expect(page.locator('#time')).toBeHidden();
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await expect(page.locator('#decision')).toContainText('Feeder A is back — 6 units online');
   await expect(page.locator('#decision')).toContainText('runs out at 01:30');
-  await expect(page.locator('#decision')).toContainText("isn't due until 03:30");
+  await expect(page.locator('#decision')).toContainText(`isn't due until ${worldText(480 + delayB)}`);
 });
 
 test('sound starts on Begin, toggles with M, and cues follow live events only', async ({ page }) => {
@@ -566,7 +620,7 @@ test('sound starts on Begin, toggles with M, and cues follow live events only', 
   await expect(page.locator('#sound-toggle')).toHaveAttribute('aria-pressed', 'true');
   await dispatchBoth(page);
   await next(page, '01:00');
-  await next(page, '04:00');
+  await advanceTo(page, 240);
   await reconnect(page, 'clinic');
   await reconnect(page, 'pump');
   await reconnect(page, 'housing-a');

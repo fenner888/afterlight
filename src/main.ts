@@ -133,7 +133,12 @@ function activateNode(id: NodeId): void {
 }
 
 function openPopover(id: NodeId): void {
-  if (popoverNode !== id) popoverReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  if (popoverNode !== id) {
+    const active = document.activeElement;
+    // Never capture the popover's own chrome — a same-moment re-render can leave
+    // focus on it, and restoring there would trap focus inside the hidden dialog.
+    if (active instanceof HTMLElement && !active.closest('#node-actions')) popoverReturnFocus = active;
+  }
   popoverNode = id;
   popoverKey = '';
   element('node-actions').hidden = false;
@@ -264,7 +269,10 @@ function taskText(state: State): string {
   if (current === 'dispatch') {
     if (crewsOut.length === 0) return 'Send both crews — click a broken feeder on the map.';
     const crew = state.crews[crewsOut[0]!];
-    return `${LABELS[crewsOut[0]!]} is heading to ${LABELS[crew.target!]}. Send the other crew to the other feeder — or press Space to start with one.`;
+    const idleCrew = CREW_IDS.find(id => state.crews[id].phase === 'idle');
+    const openFeeder = FEEDER_IDS.find(id => state.feeders[id] === 'faulted');
+    const next = idleCrew && openFeeder ? ` Send ${LABELS[idleCrew]} to ${LABELS[openFeeder]} — the longer it waits, the later that repair finishes.` : '';
+    return `${LABELS[crewsOut[0]!]} is rolling to ${LABELS[crew.target!]}.${next}`;
   }
   if (capacity(state) === 0) {
     const estimate = (id: (typeof FEEDER_IDS)[number]): string => {
@@ -401,11 +409,18 @@ function command(action: Action): void {
     return;
   }
   if (popoverNode) text('popover-message', '');
-  if (action.type === 'dispatch' && !liveClock.running && CREW_IDS.every(id => live.crews[id].phase !== 'idle')) {
-    decisionMessage = '';
-    liveClock.setRunning(true);
-    lastClockTime = performance.now();
-    feedback(`Both crews rolling — time is running at ${liveClock.speed}x.`);
+  if (action.type === 'dispatch') {
+    if (!liveClock.running) {
+      decisionMessage = '';
+      liveClock.setRunning(true);
+      lastClockTime = performance.now();
+    }
+    const idleCrew = CREW_IDS.find(id => live.crews[id].phase === 'idle');
+    const openFeeder = FEEDER_IDS.find(id => live.feeders[id] === 'faulted');
+    if (idleCrew && openFeeder) {
+      feedback(`${LABELS[action.crew]} rolling to ${LABELS[action.target]}. Send ${LABELS[idleCrew]} to ${LABELS[openFeeder]} next.`);
+      activateNode(openFeeder);
+    } else feedback(`${LABELS[action.crew]} rolling to ${LABELS[action.target]} — time is running.`);
   }
   if (phase(live) === 'restored') {
     showDecision('All services restored', 'The summary shows how long each service was dark.', 'View summary');
