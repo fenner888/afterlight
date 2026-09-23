@@ -228,6 +228,48 @@ export function gravel(ctx: SceneContext): TextureSet {
   return { map: make(ctx, el), normalMap: normalFromHeight(ctx, fbm(256, 131, { octaves: 6, base: 8 }), 256, .8) };
 }
 
+// Coursed ashlar stone for the seawall face: regular block courses with mortar
+// joints, damp variation near the base baked in via the fBm wash.
+export function coursedStone(ctx: SceneContext): TextureSet {
+  const { el, g } = canvas(512);
+  const { g: hg } = canvas(256);
+  g.fillStyle = '#565c58';
+  g.fillRect(0, 0, 512, 512);
+  hg.fillStyle = '#383838';
+  hg.fillRect(0, 0, 256, 256);
+  const rand = lcg(311);
+  const bw = 86, bh = 42, mortar = 4;
+  for (let row = 0; row * bh < 512 + bh; row++) {
+    const offset = row % 2 ? bw / 2 : 0;
+    for (let col = -1; col * bw < 512 + bw; col++) {
+      const x = col * bw + offset, y = row * bh;
+      const v = (rand() - .5) * 22;
+      g.fillStyle = `rgb(${104 + v | 0},${108 + v | 0},${102 + v * .8 | 0})`;
+      g.fillRect(x + mortar / 2, y + mortar / 2, bw - mortar, bh - mortar);
+      const hv = 150 + (rand() - .5) * 36;
+      hg.fillStyle = `rgb(${hv | 0},${hv | 0},${hv | 0})`;
+      hg.fillRect((x + mortar / 2) / 2, (y + mortar / 2) / 2, (bw - mortar) / 2, (bh - mortar) / 2);
+    }
+  }
+  const height = new Float32Array(256 * 256);
+  const hd = hg.getImageData(0, 0, 256, 256).data;
+  for (let i = 0; i < 256 * 256; i++) height[i] = hd[i * 4]! / 255;
+  const wash = fbm(512, 317, { octaves: 4, base: 6 });
+  const src = g.getImageData(0, 0, 512, 512);
+  for (let i = 0; i < 512 * 512; i++) {
+    const m = 1 + (wash[i]! - .5) * .3;
+    src.data[i * 4] = Math.min(255, src.data[i * 4]! * m);
+    src.data[i * 4 + 1] = Math.min(255, src.data[i * 4 + 1]! * m);
+    src.data[i * 4 + 2] = Math.min(255, src.data[i * 4 + 2]! * m);
+  }
+  g.putImageData(src, 0, 0);
+  return {
+    map: make(ctx, el),
+    normalMap: normalFromHeight(ctx, height, 256, 1),
+    roughnessMap: roughnessFromFbm(ctx, 256, 331, .78, .2),
+  };
+}
+
 export function paintedMetal(ctx: SceneContext, tint: string): TextureSet {
   const c = new THREE.Color(tint);
   const { el } = albedoCanvas(256, fbm(256, 149, { octaves: 4, base: 7 }), [c.r * 255, c.g * 255, c.b * 255], .18);
@@ -411,7 +453,7 @@ export function chevrons(ctx: SceneContext): THREE.CanvasTexture {
 // Fresnel edge fade for additive cones: alpha dies toward the silhouette so a cone
 // reads as a shaft of light, not a solid wedge. Basic materials lack transformedNormal
 // outside envmap/skinning paths, so the normal is computed from the raw attribute.
-export const softCone = (material: THREE.MeshBasicMaterial): void => {
+export const softCone = (material: THREE.MeshBasicMaterial, power = 1.7): void => {
   material.onBeforeCompile = shader => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vEdge;')
@@ -423,7 +465,7 @@ export const softCone = (material: THREE.MeshBasicMaterial): void => {
         vEdge = abs(dot(normalize(normalMatrix * coneNrm), normalize(-mvPosition.xyz)));`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vEdge;')
-      .replace('#include <alphamap_fragment>', '#include <alphamap_fragment>\n diffuseColor.a *= pow(vEdge, 1.7);');
+      .replace('#include <alphamap_fragment>', `#include <alphamap_fragment>\n diffuseColor.a *= pow(vEdge, ${power.toFixed(2)});`);
   };
 };
 

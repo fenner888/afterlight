@@ -346,6 +346,10 @@ export class DistrictScene {
     this.lights.update(statusOf, crewActive, this.sky.nightness);
     this.sky.update(state.tick, connectedLoad(state), current, dayPhase(state.tick), now, dt);
     this.sea.update(now, dt, this.sky.nightness);
+    // Distant-shore windows glow only at night — sparse and dim, never by day.
+    const shoreWindows = this.district.shoreWindows;
+    shoreWindows.visible = this.sky.nightness > .3;
+    shoreWindows.material.opacity = .5 * this.sky.nightness;
     // Rain-darkened concrete/asphalt: albedo multiplier fades from 1 to ~0.72 as rain falls.
     const wet = 1 - .28 * (1 - connectedLoad(state) / 13);
     for (const material of this.district.wetMaterials) material.color.setRGB(wet, wet, wet * 1.01);

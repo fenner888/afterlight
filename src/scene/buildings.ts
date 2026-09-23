@@ -1,10 +1,32 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { SERVICE_IDS, FEEDER_IDS, isFeeder, isService } from '../scenario.ts';
 import type { NodeId, ServiceId, FeederId } from '../scenario.ts';
 import { POSITIONS } from './common.ts';
 import type { SceneContext } from './common.ts';
-import { asphalt, concrete, brick, corrugated, gravel, paintedMetal, wood, puddleRoughness, beamGradient, softCone } from './textures.ts';
+import { asphalt, concrete, brick, corrugated, coursedStone, gravel, paintedMetal, wood, puddleRoughness, beamGradient, softCone } from './textures.ts';
 import type { TextureSet } from './textures.ts';
+
+// Vertex-coloured merge helpers (same pattern as vehicles.ts): static decoration
+// collapses into one draw call per material class.
+const colorize = (g: THREE.BufferGeometry, color: number): THREE.BufferGeometry => {
+  const c = new THREE.Color(color);
+  const count = g.getAttribute('position').count;
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) colors.set([c.r, c.g, c.b], i * 3);
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return g;
+};
+const part = (list: THREE.BufferGeometry[], color: number, w: number, h: number, d: number, x: number, y: number, z: number, ry = 0): void => {
+  const g = new THREE.BoxGeometry(w, h, d);
+  if (ry) g.rotateY(ry);
+  colorize(g, color).translate(x, y, z);
+  list.push(g);
+};
+const lcg = (seed: number): (() => number) => {
+  let state = seed >>> 0;
+  return () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state / 4294967296; };
+};
 
 export type ServiceLight = 'offline' | 'backup' | 'grid';
 
@@ -14,9 +36,11 @@ const AMBER = new THREE.Color(0xdfac60).multiplyScalar(1.7);
 const OFF = new THREE.Color(0x141f26);
 
 // One instanced quad per window across all service buildings; instanceColor drives
-// the lit look (values > 1 feed bloom at night).
+// the lit look (values > 1 feed bloom at night). A second InstancedMesh carries a
+// merged sill/lintel/jamb surround per window so lit panes read as inset frames.
 export class WindowLights {
   private mesh: THREE.InstancedMesh;
+  private frames: THREE.InstancedMesh;
   private ranges = new Map<ServiceId, { start: number; count: number }>();
   private onHash: Float32Array;
   private stagger: Float32Array;
@@ -34,10 +58,21 @@ export class WindowLights {
     ctx.track(material);
     this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
     this.mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+    const frameParts = [
+      colorize(new THREE.BoxGeometry(.44, .05, .09), 0x9aa39c).translate(0, -.25, .02),  // sill
+      colorize(new THREE.BoxGeometry(.42, .06, .07), 0x9aa39c).translate(0, .25, .01),   // lintel
+      colorize(new THREE.BoxGeometry(.045, .44, .06), 0x878f8a).translate(-.195, 0, .01),
+      colorize(new THREE.BoxGeometry(.045, .44, .06), 0x878f8a).translate(.195, 0, .01),
+    ];
+    const frameGeometry = ctx.track(mergeGeometries(frameParts)!);
+    frameParts.forEach(g => g.dispose());
+    const frameMaterial = ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .8, metalness: .05, envMapIntensity: .5 }));
+    this.frames = new THREE.InstancedMesh(frameGeometry, frameMaterial, capacity);
+    this.frames.instanceMatrix.setUsage(THREE.StaticDrawUsage);
     this.onHash = new Float32Array(capacity);
     this.stagger = new Float32Array(capacity);
     this.tint = new Float32Array(capacity);
-    ctx.world.add(this.mesh);
+    ctx.world.add(this.mesh, this.frames);
   }
 
   addWindow(service: ServiceId, position: THREE.Vector3, side: boolean): void {
@@ -50,13 +85,14 @@ export class WindowLights {
       new THREE.Vector3(1, 1, 1),
     );
     this.mesh.setMatrixAt(index, matrix);
+    this.frames.setMatrixAt(index, matrix);
     this.mesh.setColorAt(index, OFF);
     this.onHash[index] = this.rand();
     this.stagger[index] = this.rand();
     this.tint[index] = this.rand();
   }
 
-  seal(): void { this.mesh.count = this.cursor; }
+  seal(): void { this.mesh.count = this.cursor; this.frames.count = this.cursor; }
 
   note(id: ServiceId, status: ServiceLight, now: number): void {
     if (this.lastStatus.get(id) === status) return;
@@ -97,6 +133,7 @@ export interface DistrictBuild {
   beaconLamp: THREE.MeshStandardMaterial;
   clinicCross: THREE.MeshStandardMaterial;
   clinicGen: THREE.MeshStandardMaterial;
+  shoreWindows: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   wetMaterials: THREE.MeshStandardMaterial[];
 }
 
@@ -124,6 +161,7 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
     brickRed: brick(ctx, 'red'),
     brickBrown: brick(ctx, 'brown'),
     corrugated: corrugated(ctx),
+    stone: coursedStone(ctx),
     gravel: gravel(ctx),
     metalDark: paintedMetal(ctx, '#3d4a50'),
     metalPaint: paintedMetal(ctx, '#5f707a'),
@@ -199,29 +237,144 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
     }
   };
 
+  // Merge a list of translated/coloured geometries into one mesh (one draw call).
+  // Normalizes to non-indexed so ExtrudeGeometry can mix with boxes/cylinders.
+  const merged = (parent: THREE.Object3D, material: THREE.Material, geometries: THREE.BufferGeometry[]): THREE.Mesh => {
+    const normalized = geometries.map(g => (g.index ? g.toNonIndexed() : g));
+    const geometry = ctx.track(mergeGeometries(normalized)!);
+    normalized.forEach(g => g.dispose());
+    geometries.forEach(g => g.dispose());
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  };
+
   const buildQuay = (): void => {
-    const wall = skin(sets.concrete, 0x5a685f, 4.2, .22, .9);
-    ctx.box(world, wall, [0, -.2, 9.65], [25.2, 1.3, .8]);
-    // Darker wet band near the water line.
-    ctx.box(world, plain(0x35423e), [0, -.62, 10.06], [25.2, .45, .02]);
-    ctx.box(world, skin(sets.concrete, 0x6a766d, 4.2, .17, .9), [0, .52, 9.6], [25.4, .1, 1]);
+    // Stone seawall: coursed faces on all four sides standing in the water,
+    // extending well below the surface (y -2.2) so no slab edge ever floats.
+    const stone = sets.stone;
+    const wallFace = (x: number, z: number, w: number, d: number, ry = 0): void => {
+      const maps = cloneSet(ctx, stone, (ry ? d : w) / 6, 1.1);
+      const material = new THREE.MeshStandardMaterial({ color: 0xffffff, ...maps, roughness: .9, metalness: .03, envMapIntensity: .5 });
+      ctx.track(material);
+      wetMaterials.push(material);
+      ctx.box(world, material, [x, -.85, z], [w, 2.7, d]); // y -2.2 → .5, tucked under the capstone
+    };
+    wallFace(0, 9.72, 25.3, .6);          // south — the working quay face
+    wallFace(0, -9.72, 25.3, .6);         // north
+    wallFace(12.72, 0, .6, 19.3, 1);      // east
+    wallFace(-12.72, 0, .6, 19.3, 1);     // west
+
+    // Capstone lip ring + darker waterline band, each merged to a single mesh.
+    const capParts: THREE.BufferGeometry[] = [];
+    part(capParts, 0x6f7a72, 25.6, .14, 1.1, 0, .55, 9.95);
+    part(capParts, 0x6f7a72, 25.6, .14, 1.1, 0, .55, -9.95);
+    part(capParts, 0x6f7a72, 1.1, .14, 19.6, 12.75, .55, 0);
+    part(capParts, 0x6f7a72, 1.1, .14, 19.6, -12.75, .55, 0);
+    merged(world, ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .85, metalness: .05, envMapIntensity: .5 })), capParts);
+    const bandParts: THREE.BufferGeometry[] = [];
+    part(bandParts, 0x2f3d39, 25.4, .6, .06, 0, -.72, 10.03);
+    part(bandParts, 0x2f3d39, 25.4, .6, .06, 0, -.72, -10.03);
+    part(bandParts, 0x2f3d39, .06, .6, 19.4, 13.03, -.72, 0);
+    part(bandParts, 0x2f3d39, .06, .6, 19.4, -13.03, -.72, 0);
+    merged(world, ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: .4 })), bandParts);
+
+    // Timber pilings under the pier — two bents of three, merged.
     const plank = skin(sets.wood, 0xa89880, 1, 2, .85);
-    const post = plain(0x3a332b);
     ctx.box(world, plank, [-9.3, .16, 11.6], [1.7, .14, 4.4]);
-    for (const [px, pz] of [[-10, 9.8], [-8.6, 9.8], [-10, 13.4], [-8.6, 13.4]] as const)
-      ctx.cylinder(world, post, [px, -.35, pz], .09, 1.15);
+    const pileParts: THREE.BufferGeometry[] = [];
+    for (const pz of [10.1, 11.9, 13.5]) for (const px of [-10, -8.6])
+      pileParts.push(colorize(new THREE.CylinderGeometry(.1, .11, 2.6, 8), 0x3a332b).translate(px, -.55, pz));
+    merged(world, ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .9, metalness: 0, envMapIntensity: .4 })), pileParts);
+
+    // Wall ladders, tyre fenders and bollards along the working face.
+    const ladderParts: THREE.BufferGeometry[] = [];
+    for (const lx of [-4.2, 3.6]) {
+      for (const s of [-.16, .16]) part(ladderParts, 0x55606a, .045, 1.9, .045, lx + s, -.35, 10.06);
+      for (let r = 0; r < 6; r++) part(ladderParts, 0x55606a, .36, .04, .04, lx, -1.05 + r * .3, 10.07);
+    }
+    merged(world, ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .6, metalness: .4, envMapIntensity: .6 })), ladderParts);
+    const tyreGeometry = ctx.track(new THREE.TorusGeometry(.2, .075, 8, 14));
+    const tyres = new THREE.InstancedMesh(tyreGeometry, plain(0x14181a), 4);
+    const matrix = new THREE.Matrix4();
+    [-11.9, -9.9, -7.1, -5.4].forEach((fx, i) => {
+      matrix.makeTranslation(fx, -.18, 10.05);
+      tyres.setMatrixAt(i, matrix);
+    });
+    tyres.castShadow = true;
+    world.add(tyres);
     const bollard = skin(sets.metalDark, 0x8b979b, 1, 1, .5, .4);
     for (const bx of [-11, -10, -8.2, -7.4]) ctx.cylinder(world, bollard, [bx, .58, 9.12], .09, .3);
-    for (const [bx, bz, turn] of [[-7.6, 12.3, -.35], [-11.6, 13.6, .5]] as const) {
-      const boat = new THREE.Group();
-      ctx.box(boat, skin(sets.wood, 0x7c5648, 1, 1, .8), [0, .3, 0], [1.7, .55, .75]);
-      ctx.box(boat, plain(0x46322b), [0, .62, 0], [1.3, .12, .55]);
-      ctx.box(boat, skin(sets.metalPaint, 0x8d8276, 1, 1, .6), [.15, .8, 0], [.55, .3, .45]);
-      ctx.cylinder(boat, post, [-.3, 1.5, 0], .04, 1.9);
-      boat.position.set(bx, -.78, bz);
-      boat.rotation.y = turn;
-      world.add(boat);
+
+    // Riprap at the south-east corner: seeded scatter of angular rocks.
+    const rand = lcg(97);
+    const rockGeometry = ctx.track(new THREE.IcosahedronGeometry(.34, 0));
+    const rocks = new THREE.InstancedMesh(rockGeometry, plain(0x3d4442), 14);
+    const quat = new THREE.Quaternion();
+    const euler = new THREE.Euler();
+    for (let i = 0; i < 14; i++) {
+      const x = 10.9 + rand() * 2.6, z = 8.9 + rand() * 2.4;
+      const y = -.95 + rand() * .55, s = .55 + rand() * .8;
+      euler.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+      matrix.compose(new THREE.Vector3(x, y, z), quat.setFromEuler(euler), new THREE.Vector3(s, s * .75, s));
+      rocks.setMatrixAt(i, matrix);
     }
+    rocks.castShadow = true;
+    world.add(rocks);
+  };
+
+  // Fog-faded far shore across the water: one continuous low land strip with a
+  // gentle ridge silhouette, towns clustered in small groups along it, a few lit
+  // windows at night only. Decoration only — not nodes, never interactive.
+  const buildShore = (): THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> => {
+    const rand = lcg(211);
+    // Seeded hill profile: the strip's top edge undulates so it never reads flat.
+    const ridge = (x: number): number =>
+      1.15 + .85 * Math.sin(x * .019 + 1.7) + .5 * Math.sin(x * .041 + .4) + .3 * Math.sin(x * .067 + 2.9);
+    const parts: THREE.BufferGeometry[] = [];
+    const strip = new THREE.Shape();
+    strip.moveTo(-170, -3.5);
+    for (let x = -170; x <= 170; x += 4) strip.lineTo(x, Math.max(.45, ridge(x)));
+    strip.lineTo(170, -3.5);
+    strip.closePath();
+    const land = new THREE.ExtrudeGeometry(strip, { depth: 12, bevelEnabled: false });
+    parts.push(colorize(land.translate(0, 0, -198), 0x35424c));
+    // Towns: four clusters with open water between; varied sizes, some pitched roofs.
+    const windowSpots: [number, number][] = [];
+    for (const cx of [-64, -10, 42, 94]) {
+      const count = 4 + Math.floor(rand() * 4);
+      let tx = cx - count * 1.5;
+      for (let b = 0; b < count; b++) {
+        const w = 1.3 + rand() * 3.6, h = .8 + rand() * 2.9, d = 4 + rand() * 2.5;
+        const base = Math.max(.45, ridge(tx + w / 2)) - .35;
+        parts.push(colorize(new THREE.BoxGeometry(w, h, d), 0x3d4a56).translate(tx + w / 2, base + h / 2, -192));
+        if (rand() < .45) {
+          const gable = new THREE.Shape();
+          gable.moveTo(-d / 2, 0);
+          gable.lineTo(d / 2, 0);
+          gable.lineTo(0, .45 + rand() * .55);
+          gable.closePath();
+          const roof = new THREE.ExtrudeGeometry(gable, { depth: w, bevelEnabled: false });
+          roof.rotateY(Math.PI / 2); // ridge along x
+          parts.push(colorize(roof.translate(tx, base + h, -192), 0x333f49));
+        }
+        if (rand() < .7) windowSpots.push([tx + w * (.25 + rand() * .5), base + .35 + rand() * Math.max(.3, h - .5)]);
+        tx += w + .8 + rand() * 2.4;
+      }
+    }
+    merged(world, ctx.track(new THREE.MeshBasicMaterial({ vertexColors: true, fog: true })), parts);
+    const litMaterial = ctx.track(new THREE.MeshBasicMaterial({ color: 0xc9965a, transparent: true, opacity: 0, fog: true }));
+    const lit = new THREE.InstancedMesh(ctx.track(new THREE.PlaneGeometry(.4, .55)), litMaterial, windowSpots.length);
+    const matrix = new THREE.Matrix4();
+    windowSpots.forEach(([wx, wy], i) => {
+      matrix.makeTranslation(wx, wy, -187.4);
+      lit.setMatrixAt(i, matrix);
+    });
+    lit.visible = false;
+    world.add(lit);
+    return lit;
   };
 
   const buildWetDetails = (): void => {
@@ -264,15 +417,30 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
   const buildDetails = (): void => {
     const trees: [number, number, number][] = [[-11, -4, 1], [-5.8, -.4, .8], [5.4, -3.8, 1.1], [10.5, -.5, .9], [1.1, 8.4, 1], [10.5, 5.2, .85], [-11.4, 2.6, .75], [4.6, 7.6, .9], [-6.8, -7.6, .8], [11.3, -6.4, 1]];
     const trunkGeometry = ctx.track(new THREE.CylinderGeometry(.09, .13, 1, 7));
-    const canopyGeometry = ctx.track(new THREE.ConeGeometry(.55, 1.5, 8));
+    const lumpGeometry = ctx.track(new THREE.IcosahedronGeometry(.52, 1));
     const trunks = new THREE.InstancedMesh(trunkGeometry, skin(sets.wood, 0x6b6152, 1, 1, .9), trees.length);
-    const canopies = new THREE.InstancedMesh(canopyGeometry, plain(0x3c5748), trees.length);
+    // Clustered canopy: one crown lump + three offset lower lumps per tree,
+    // per-instance green variation (instanceColor), deterministic via lcg.
+    const lumpsPer = 4;
+    const canopyMaterial = ctx.track(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .95, metalness: 0, envMapIntensity: .4 }));
+    const canopies = new THREE.InstancedMesh(lumpGeometry, canopyMaterial, trees.length * lumpsPer);
     const matrix = new THREE.Matrix4();
+    const rand = lcg(131);
+    const leaf = new THREE.Color();
     trees.forEach(([x, z, size], index) => {
       matrix.makeScale(size, size, size).setPosition(x, .42 + .5 * size, z);
       trunks.setMatrixAt(index, matrix);
-      matrix.makeScale(size, size, size).setPosition(x, .42 + 1.65 * size, z);
-      canopies.setMatrixAt(index, matrix);
+      const lumps: [number, number, number, number][] = [
+        [0, 1.62, 0, 1],
+        [.38, 1.2, .18, .78], [-.36, 1.24, -.14, .72], [.05, 1.28, -.4, .66],
+      ];
+      lumps.forEach(([lx, ly, lz, ls], l) => {
+        const i = index * lumpsPer + l;
+        matrix.makeScale(size * ls, size * ls * .92, size * ls).setPosition(x + lx * size, .42 + ly * size, z + lz * size);
+        canopies.setMatrixAt(i, matrix);
+        leaf.setHex(0x3c5748).offsetHSL((rand() - .5) * .04, (rand() - .5) * .12, (rand() - .5) * .08);
+        canopies.setColorAt(i, leaf);
+      });
     });
     trunks.castShadow = canopies.castShadow = true;
     world.add(trunks, canopies);
@@ -320,12 +488,16 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
 
   buildTerrain();
   buildQuay();
+  const shoreWindows = buildShore();
   buildWetDetails();
   buildLinePoles();
   buildDetails();
 
+  // Shared vertex-coloured material for merged per-building decoration.
+  const trimMaterial = ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .7, metalness: .18, envMapIntensity: .6 }));
+
   // Instanced windows across all service buildings.
-  const windows = new WindowLights(ctx, 96);
+  const windows = new WindowLights(ctx, 120);
   const windowFace = (id: ServiceId, width: number, depth: number, height: number, rows: number, frontCols: number, sideCols: number): void => {
     const [bx, bz] = POSITIONS[id];
     const rowY = (row: number): number => .45 + .14 + .55 + (row + .5) * (height - .9) / rows;
@@ -374,18 +546,41 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
       ctx.cylinder(group, band, [0, 1.05, 0], .52, .3);
       ctx.cylinder(group, band, [0, 2.3, 0], .52, .3);
       ctx.cylinder(group, parapet, [0, 3.17, 0], .74, .14);
+      // Gallery railing: a ring rail on ten posts, plus lantern mullions and a
+      // door at the tower base — all merged into one trim mesh.
+      const beaconParts: THREE.BufferGeometry[] = [];
+      beaconParts.push(colorize(new THREE.TorusGeometry(.8, .025, 6, 20).rotateX(Math.PI / 2), 0x5c6d75).translate(0, 3.36, 0));
+      for (let i = 0; i < 10; i++) {
+        const a = i / 10 * Math.PI * 2;
+        beaconParts.push(colorize(new THREE.CylinderGeometry(.018, .018, .32, 5), 0x5c6d75).translate(Math.cos(a) * .78, 3.2, Math.sin(a) * .78));
+      }
+      for (let i = 0; i < 4; i++) {
+        const a = i / 4 * Math.PI * 2 + Math.PI / 4;
+        beaconParts.push(colorize(new THREE.BoxGeometry(.03, .56, .03), 0x3a4448).translate(Math.cos(a) * .44, 3.5, Math.sin(a) * .44));
+      }
+      part(beaconParts, 0x252d31, .34, .62, .08, 0, .42, .5);
+      part(beaconParts, 0x9aa39c, .42, .07, .1, 0, .76, .5);
+      merged(group, trimMaterial, beaconParts);
+      // Glazed lantern room around the (state-driven) lamp core.
       const lantern = plain(0x4a3a20, 0xffd9a0);
       lantern.emissiveIntensity = .05;
       beacon.lamp = lantern;
-      ctx.cylinder(group, lantern, [0, 3.5, 0], .4, .52);
+      ctx.cylinder(group, lantern, [0, 3.5, 0], .26, .5);
+      const glazing = ctx.track(new THREE.MeshPhysicalMaterial({
+        color: 0x9db8c4, roughness: .12, metalness: .1, transparent: true, opacity: .32,
+        envMapIntensity: 1.6, side: THREE.DoubleSide, depthWrite: false,
+      }));
+      const glazingMesh = new THREE.Mesh(ctx.track(new THREE.CylinderGeometry(.44, .44, .56, 12, 1, true)), glazing);
+      glazingMesh.position.set(0, 3.5, 0);
+      group.add(glazingMesh);
       ctx.cylinder(group, parapet, [0, 3.86, 0], .64, .17);
       const beamGeometry = ctx.track(new THREE.ConeGeometry(1.9, 23, 12, 1, true));
       beamGeometry.rotateX(-Math.PI / 2); // apex at the lantern, widening outward (group scale makes it ~26 long)
       const beamMaterial = new THREE.MeshBasicMaterial({
-        color: 0xffe0a8, transparent: true, opacity: .07, depthWrite: false,
+        color: 0xffe0a8, transparent: true, opacity: .05, depthWrite: false,
         alphaMap: beamGradient(ctx), side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
       });
-      softCone(beamMaterial);
+      softCone(beamMaterial, 3);
       ctx.track(beamMaterial);
       const pivot = new THREE.Group();
       pivot.position.set(0, 3.5, 0);
@@ -397,7 +592,9 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
       beacon.pivot = pivot;
     } else {
       const housing = id === 'housing-a' || id === 'housing-b';
-      const height = (housing ? (id === 'housing-a' ? 2.7 : 3.1) : 1.55) * 1.35;
+      // Housing massing is stepped: a shorter main block + setback top storey,
+      // keeping total height under HEIGHTS so markers stay above the roofline.
+      const height = housing ? (id === 'housing-a' ? 2.9 : 3.3) : 1.55 * 1.35;
       const width = (id === 'depot' ? 3.1 : 2.75) * 1.15;
       const depth = 2.3;
       const walls = housing
@@ -405,6 +602,24 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
         : id === 'clinic'
           ? skin(sets.concrete, 0xd8d9cb, 1.6, 1.2, .75)
           : skin(sets.corrugated, 0x9aa8ab, 2, 1.4, .65, .3);
+      // Static decoration merges into one vertex-coloured mesh per building.
+      const trim: THREE.BufferGeometry[] = [];
+      const t = (color: number, w: number, h: number, d: number, x: number, y: number, z: number, ry = 0): void =>
+        part(trim, color, w, h, d, x, y, z, ry);
+      const pipe = (color: number, r: number, len: number, x: number, y: number, z: number, axis: 'x' | 'y' | 'z'): void => {
+        const g = new THREE.CylinderGeometry(r, r, len, 8);
+        if (axis === 'x') g.rotateZ(Math.PI / 2);
+        if (axis === 'z') g.rotateX(Math.PI / 2);
+        trim.push(colorize(g, color).translate(x, y, z));
+      };
+      const doorway = (dx: number, dz: number, canopy: boolean, fabric = 0x5c4f46): void => {
+        t(0x252d31, .5, .92, .07, dx, .61, dz);
+        t(0x9aa39c, .62, .08, .1, dx, 1.1, dz);
+        if (canopy) {
+          t(fabric, 1.05, .05, .6, dx, 1.2, dz + .3);
+          for (const s of [-.45, .45]) t(0x4a555a, .05, .62, .05, dx + s, .85, dz + .55);
+        }
+      };
       ctx.box(group, concreteMat, [0, .07, 0], [width + .5, .14, depth + .6]);
       ctx.box(group, walls, [0, height / 2 + .14, 0], [width, height, depth]);
       ctx.box(group, roof, [0, height + .24, 0], [width + .2, .2, depth + .2]);
@@ -412,9 +627,20 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
       ctx.box(group, parapet, [0, height + .4, -depth / 2 - .1], [width + .2, .12, .08]);
       ctx.box(group, parapet, [width / 2 + .06, height + .4, 0], [.08, .12, depth + .2]);
       ctx.box(group, parapet, [-width / 2 - .06, height + .4, 0], [.08, .12, depth + .2]);
+      // Cornice band just under the parapet lip, proud of the wall.
+      for (const s of [-1, 1]) {
+        t(0xb4bab0, width + .3, .09, .1, 0, height + .28, s * (depth / 2 + .03));
+        t(0xb4bab0, .1, .09, depth + .3, s * (width / 2 + .03), height + .28, 0);
+      }
       ctx.box(group, skin(sets.metalDark, 0x87949a, 1, 1, .6, .3), [.55, height + .51, -.4], [.65, .42, .55]);
       ctx.box(group, roof, [-.75, height + .48, .45], [.42, .38, .42]);
-      ctx.box(group, skin(sets.metalDark, 0x3a4a50, 1, 1, .5, .4), [.72, .62, depth / 2 + .01], [.42, .96, .05]);
+      // Rooftop clutter: vent pipes and a whip antenna.
+      pipe(0x5c6d75, .06, .55, -.4, height + .56, -.6, 'y');
+      pipe(0x5c6d75, .045, .4, .1, height + .5, .3, 'y');
+      pipe(0x39454a, .018, 1.2, width / 2 - .35, height + .9, -depth / 2 + .4, 'y');
+      t(0x39454a, .3, .02, .02, width / 2 - .35, height + 1.3, -depth / 2 + .4);
+      // Drainpipes down both front corners.
+      for (const s of [-1, 1]) pipe(0x46535a, .035, height + .15, s * (width / 2 - .14), .14 + (height + .15) / 2, depth / 2 + .07, 'y');
       const rows = housing ? 4 : id === 'clinic' ? 2 : 1;
       if (isService(id)) windowFace(id, width, depth, height, rows, 4, housing || id === 'clinic' ? 4 : 2);
       if (housing) {
@@ -424,31 +650,61 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
           ctx.box(group, balcony, [-.35, y, depth / 2 + .14], [1.8, .05, .22]);
           ctx.box(group, balcony, [-.35, y + .2, depth / 2 + .24], [1.8, .04, .03]);
         }
-        ctx.cylinder(group, concreteMat, [-.75, height + .68, -.45], .3, .55);
+        // Setback top storey (stepped massing) with its own cap and lit windows.
+        const setW = width * .6, setD = depth * .55, setH = id === 'housing-a' ? .65 : .7;
+        ctx.box(group, walls, [-.15, height + .34 + setH / 2, -.16 * depth], [setW, setH, setD]);
+        t(0x6a7a80, setW + .16, .09, setD + .16, -.15, height + .38 + setH, -.16 * depth);
+        const [bx, bz] = POSITIONS[id];
+        const wy = .45 + height + .34 + setH * .55;
+        const frontZ = bz - .16 * depth + setD / 2 + .017;
+        for (let c = -1; c <= 1; c++) windows.addWindow(id, new THREE.Vector3(bx - .15 + c * .42, wy, frontZ), false);
+        for (const dz of [-.2, .2]) windows.addWindow(id, new THREE.Vector3(bx - .15 + setW / 2 + .017, wy, bz - .16 * depth + dz), true);
+        // Roof water tank on legs.
+        ctx.cylinder(group, concreteMat, [-.75, height + .78, -.45], .3, .55);
+        for (const [lx, lz] of [[-.95, -.62], [-.55, -.62], [-.95, -.28], [-.55, -.28]] as const)
+          t(0x55606a, .05, .35, .05, lx, height + .38, lz);
+        doorway(.9, depth / 2 + .04, true, 0x6a5f52);
       }
       if (id === 'clinic') {
         const cross = plain(0x2a3438, 0xd0453e);
         cross.emissiveIntensity = 0;
         clinic.cross = cross;
-        ctx.box(group, cross, [-.75, height + .55, 0], [.6, .16, .16]);
-        ctx.box(group, cross, [-.75, height + .55, 0], [.16, .6, .16]);
+        // Entrance canopy with the lit cross standing on its fascia.
+        doorway(0, depth / 2 + .04, false);
+        t(0x8f979b, 1.5, .07, .7, 0, 1.22, depth / 2 + .38);
+        for (const s of [-.62, .62]) t(0x8f979b, .06, .68, .06, s, .85, depth / 2 + .68);
+        ctx.box(group, cross, [0, 1.45, depth / 2 + .75], [.5, .12, .06]);
+        ctx.box(group, cross, [0, 1.45, depth / 2 + .75], [.12, .5, .06]);
         const generator = plain(0x33302a, 0xdfac60);
         generator.emissiveIntensity = .1;
         clinic.gen = generator;
         ctx.box(group, generator, [width / 2 + .35, .3, .5], [.55, .45, .7]);
+        pipe(0x3a3a34, .045, .75, width / 2 + .35, .85, .25, 'y'); // exhaust stack
+        t(0x1e2225, .4, .22, .03, width / 2 + .35, .32, .87);      // vent slats
       }
       if (id === 'pump') {
         const metal = skin(sets.metalPaint, 0x88979b, 1, 1, .45, .5);
         ctx.cylinder(group, metal, [1.9, .62, -.25], .53, 1.2);
         ctx.cylinder(group, concreteMat, [1.9, .62, .75], .32, .8);
         ctx.box(group, roof, [1.7, .28, 1.55], [.3, .3, 2.2]);
+        // Pipework: run from the facade to the tank plus a riser.
+        pipe(0x88979b, .06, 1.3, 1.2, .55, -.25, 'x');
+        pipe(0x88979b, .05, .8, .6, .55, -.25, 'y');
+        pipe(0x88979b, .05, .8, 1.55, .55, .75, 'y');
+        doorway(-.6, depth / 2 + .04, true, 0x4a555a);
       }
       if (id === 'depot') {
         const door = skin(sets.corrugated, 0x6d7c82, 1.2, 1.2, .6, .35);
         ctx.box(group, door, [-.72, .72, depth / 2 + .04], [1.2, 1.2, .07]);
         ctx.box(group, door, [.72, .72, depth / 2 + .04], [1.2, 1.2, .07]);
         for (const x of [-.72, .72]) ctx.box(group, parapet, [x, .72, depth / 2 + .08], [.05, 1.1, .03]);
+        // Low office annex on the west side + a personnel door by the bays.
+        ctx.box(group, walls, [-width / 2 - .45, .82, -.3], [.9, 1.36, 1.7]);
+        t(0x6a7a80, 1.04, .08, 1.84, -width / 2 - .45, 1.54, -.3);
+        doorway(1.58, depth / 2 + .04, false);
+        doorway(-width / 2 - .45, .61, true, 0x4a555a);
       }
+      if (trim.length) merged(group, trimMaterial, trim);
     }
     const [x, z] = POSITIONS[id];
     group.position.set(x, .45, z);
@@ -470,6 +726,7 @@ export function buildDistrict(ctx: SceneContext): DistrictBuild {
     beaconLamp: beacon.lamp!,
     clinicCross: clinic.cross!,
     clinicGen: clinic.gen!,
+    shoreWindows,
     wetMaterials,
   };
 }

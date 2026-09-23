@@ -25,16 +25,19 @@ const smoothstep = (edge0: number, edge1: number, x: number): number => {
   return t * t * (3 - 2 * t);
 };
 
-// Box geometry with a flat colour baked into a `color` attribute so a whole
-// truck body/dark set merges into one vertex-coloured mesh per material class.
-const part = (list: THREE.BufferGeometry[], color: number, w: number, h: number, d: number, x: number, y: number, z: number): void => {
-  const g = new THREE.BoxGeometry(w, h, d);
+// Flat colour baked into a `color` attribute so whole assemblies merge into one
+// vertex-coloured mesh per material class.
+const colorize = (g: THREE.BufferGeometry, color: number): THREE.BufferGeometry => {
   const c = new THREE.Color(color);
   const count = g.getAttribute('position').count;
   const colors = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) colors.set([c.r, c.g, c.b], i * 3);
   g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  g.translate(x, y, z);
+  return g;
+};
+const part = (list: THREE.BufferGeometry[], color: number, w: number, h: number, d: number, x: number, y: number, z: number): void => {
+  const g = new THREE.BoxGeometry(w, h, d);
+  colorize(g, color).translate(x, y, z);
   list.push(g);
 };
 
@@ -96,7 +99,7 @@ export class Fleet {
       ctx.world.add(truck.root);
     }
     this.buildParkedCars();
-    this.buildDeliveryBoat();
+    this.buildBoats();
   }
 
   private buildTruck(index: number): Truck {
@@ -310,41 +313,43 @@ export class Fleet {
     };
   }
 
-  // Kerb-parked civilian cars: muted colours, static, no lights. All merged into
-  // one vertex-coloured mesh (single draw call).
+  // Kerb-parked civilian cars: sedan and hatchback silhouettes with glass and a
+  // wet-night clearcoat sheen. Static, unlit, merged into one draw call.
   private buildParkedCars(): void {
     const parts: THREE.BufferGeometry[] = [];
     const colors = [0x5a6a6e, 0x7a6f66, 0x40484e, 0x6b7a85, 0x8a8078, 0x4f5a5f];
     const dark = 0x1c2226, glass = 0x1a2430;
-    // [x, z, heading, pickup]
+    // [x, z, heading, sedan]
     const spots: [number, number, number, boolean][] = [
       [-10.7, 1.32, 0, false], [10.7, 2.28, Math.PI, true],
       [-8.48, -6.6, Math.PI / 2, false], [8.48, -6.9, -Math.PI / 2, true],
       [1.8, -1.58, 0, false], [-4.8, -2.62, Math.PI, true],
     ];
-    spots.forEach(([x, z, heading, pickup], i) => {
+    spots.forEach(([x, z, heading, sedan], i) => {
       const local: THREE.BufferGeometry[] = [];
       const c = colors[i]!;
-      if (pickup) {
-        part(local, c, 1.1, .2, .48, 0, .26, 0);
-        part(local, c, .44, .3, .46, .18, .5, 0);
-        part(local, glass, .3, .2, .48, .18, .56, 0);
-        part(local, dark, .58, .1, .44, -.28, .36, 0);        // bed walls read dark
-        part(local, dark, .9, .1, .4, 0, .13, 0);
+      if (sedan) {
+        // Three-box profile: low hood, upright cabin, separate trunk.
+        part(local, c, 1.2, .2, .5, 0, .28, 0);
+        part(local, c, .38, .13, .46, .41, .4, 0);
+        part(local, c, .5, .22, .44, -.03, .49, 0);
+        part(local, c, .3, .15, .46, -.43, .4, 0);
+        part(local, glass, .52, .12, .46, -.03, .51, 0);
       } else {
-        part(local, c, 1.0, .26, .48, 0, .31, 0);
-        part(local, c, .52, .22, .44, -.04, .54, 0);
-        part(local, glass, .46, .16, .46, -.04, .56, 0);
-        part(local, dark, .9, .1, .4, 0, .13, 0);
+        // Hatchback: shorter nose, cabin glass slopes into the tailgate.
+        part(local, c, 1.02, .24, .48, 0, .3, 0);
+        const cabin = new THREE.BoxGeometry(.56, .22, .44);
+        cabin.rotateZ(-.22);
+        local.push(colorize(cabin, c).translate(-.12, .5, 0));
+        const hatchGlass = new THREE.BoxGeometry(.54, .12, .45);
+        hatchGlass.rotateZ(-.22);
+        local.push(colorize(hatchGlass, glass).translate(-.12, .52, 0));
       }
-      for (const wx of [-.32, .32]) for (const wz of [-.22, .22]) {
-        const wheel = new THREE.CylinderGeometry(.09, .09, .06, 8).rotateX(Math.PI / 2);
-        const colorsA = new Float32Array(wheel.getAttribute('position').count * 3);
-        const dc = new THREE.Color(dark);
-        for (let k = 0; k < colorsA.length; k += 3) colorsA.set([dc.r, dc.g, dc.b], k);
-        wheel.setAttribute('color', new THREE.BufferAttribute(colorsA, 3));
-        wheel.translate(wx, .09, wz);
-        local.push(wheel);
+      part(local, dark, .98, .1, .42, 0, .13, 0); // sill shadow / tyre gap
+      for (const wx of [-.34, .34]) for (const wz of [-.23, .23]) {
+        const wheel = new THREE.CylinderGeometry(.1, .1, .07, 10).rotateX(Math.PI / 2);
+        local.push(colorize(wheel, dark).translate(wx, .1, wz));
+        local.push(colorize(new THREE.CylinderGeometry(.05, .05, .075, 8).rotateX(Math.PI / 2), 0x6b7276).translate(wx, .1, wz));
       }
       const car = mergeGeometries(local)!;
       local.forEach(g => g.dispose());
@@ -354,28 +359,99 @@ export class Fleet {
     });
     const geometry = this.ctx.track(mergeGeometries(parts)!);
     parts.forEach(g => g.dispose());
-    const material = this.ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .55, metalness: .15, envMapIntensity: .7 }));
+    const material = this.ctx.track(new THREE.MeshPhysicalMaterial({
+      vertexColors: true, roughness: .38, metalness: .12,
+      clearcoat: .55, clearcoatRoughness: .2, envMapIntensity: 1,
+    }));
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true;
     this.ctx.world.add(mesh);
   }
 
-  // Small delivery boat tied alongside the pier (east side).
-  private buildDeliveryBoat(): void {
-    const parts: THREE.BufferGeometry[] = [];
-    part(parts, 0x51606a, .85, .4, 2.3, 0, .22, 0);              // hull
-    part(parts, 0x3c464d, .7, .12, 2.0, 0, .46, 0);              // deck
-    part(parts, 0x7d8a90, .6, .45, .7, 0, .72, -.55);            // wheelhouse
-    part(parts, 0x1a2430, .62, .18, .5, 0, .8, -.55);            // windows
-    part(parts, 0x39454a, .06, .8, .06, 0, 1.0, .6);             // mast
-    const geometry = this.ctx.track(mergeGeometries(parts)!);
-    parts.forEach(g => g.dispose());
-    const material = this.ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .6, metalness: .15, envMapIntensity: .7 }));
-    const boat = new THREE.Mesh(geometry, material);
-    boat.position.set(-8.25, -.62, 12.2);
-    boat.rotation.y = .12;
-    boat.castShadow = true;
-    this.ctx.world.add(boat);
+  private boats: { root: THREE.Group; base: number; phase: number }[] = [];
+
+  // Pointed-bow hull via a plan-shape extrusion; the bevel tapers the outline
+  // below the waterline and rounds the gunwale.
+  private hull(L: number, W: number, D: number): THREE.BufferGeometry {
+    const s = new THREE.Shape();
+    s.moveTo(-L / 2, -W / 2);
+    s.lineTo(L * .12, -W / 2);
+    s.quadraticCurveTo(L * .42, -W * .3, L / 2, 0);
+    s.quadraticCurveTo(L * .42, W * .3, L * .12, W / 2);
+    s.lineTo(-L / 2, W / 2);
+    s.closePath();
+    const g = new THREE.ExtrudeGeometry(s, { depth: D, bevelEnabled: true, bevelThickness: .13, bevelSize: -.07, bevelSegments: 2 });
+    g.rotateX(-Math.PI / 2); // extrusion axis -> up; shape (x = length, y = beam)
+    return g;
+  }
+
+  // Moored boats: shaped hull, rub rail, wheelhouse with windows, mast + light,
+  // mooring lines to the quay bollards. Gentle bob, off under reduced motion.
+  private buildBoats(): void {
+    const ctx = this.ctx;
+    const hullMaterial = ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .62, metalness: .12, envMapIntensity: .7 }));
+    const lampMaterial = ctx.track(new THREE.MeshStandardMaterial({ color: 0x3a352b, emissive: 0xffc98a, emissiveIntensity: 1.4 }));
+    const lampGeometry = ctx.track(new THREE.SphereGeometry(.045, 8, 6));
+    const bollards: [number, number][] = [[-11, 9.12], [-10, 9.12], [-8.2, 9.12], [-7.4, 9.12]];
+    // [x, z, heading, length, beam, wheelhouse]
+    const spots: [number, number, number, number, number, boolean][] = [
+      [-8.25, 12.2, .12, 2.4, .92, true],   // delivery boat alongside the pier
+      [-6.1, 12.9, -.28, 1.9, .74, true],   // small fishing boat
+      [-11.6, 13.6, .5, 1.9, .74, false],   // open boat
+    ];
+    spots.forEach(([bx, bz, heading, L, W, wheelhouse], i) => {
+      const root = new THREE.Group();
+      const local: THREE.BufferGeometry[] = [];
+      const paint = [0x51606a, 0x5e5648, 0x4a5a58][i]!;
+      local.push(colorize(this.hull(L, W, .34), paint).translate(0, -.16, 0));
+      // Deck and gunwale rub rail.
+      part(local, 0x3c464d, L * .82, .05, W * .82, -L * .04, .3, 0);
+      for (const s of [-1, 1]) part(local, 0x2b3236, L * .62, .05, .05, -L * .08, .36, s * (W / 2 - .03));
+      part(local, 0x2b3236, .1, .05, W * .5, L * .36, .36, 0);
+      if (wheelhouse) {
+        part(local, 0x7d8a90, .55, .42, .55, -L * .18, .55, 0);
+        part(local, 0x1a2430, .57, .14, .57, -L * .18, .6, 0); // window band
+        part(local, 0x3c464d, .6, .05, .6, -L * .18, .8, 0);
+      } else {
+        part(local, 0x46525a, .4, .12, .5, -L * .2, .38, 0);   // thwart / seat
+      }
+      // Mast with a small light.
+      local.push(colorize(new THREE.CylinderGeometry(.03, .04, 1.1, 6), 0x39454a).translate(L * .18, .85, 0));
+      local.push(colorize(new THREE.BoxGeometry(.3, .03, .03), 0x39454a).translate(L * .18, 1.2, 0));
+      const lamp = new THREE.Mesh(lampGeometry, lampMaterial);
+      lamp.position.set(L * .18, 1.36, 0);
+      root.add(lamp);
+      // Mooring line from the bow cleat to the nearest quay bollard.
+      let best: [number, number] = bollards[0]!, bd = Infinity;
+      for (const b of bollards) {
+        const d = (b[0] - bx) ** 2 + (b[1] - bz) ** 2;
+        if (d < bd) { bd = d; best = b; }
+      }
+      const cleatLocal = new THREE.Vector3(-L * .42, .34, 0);
+      const worldFrom = cleatLocal.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), heading).add(new THREE.Vector3(bx, 0, bz));
+      const worldTo = new THREE.Vector3(best[0], .6, best[1]);
+      const dir = worldTo.clone().sub(worldFrom);
+      const ropeLen = dir.length();
+      const rope = new THREE.CylinderGeometry(.015, .015, ropeLen, 5);
+      rope.translate(0, ropeLen / 2, 0);
+      rope.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize()));
+      rope.translate(worldFrom.x, worldFrom.y, worldFrom.z);             // now world-space
+      // World-space rope -> boat-local so it bobs with the hull.
+      rope.applyMatrix4(new THREE.Matrix4().makeRotationY(-heading).multiply(new THREE.Matrix4().makeTranslation(-bx, .58, -bz)));
+      local.push(colorize(rope, 0x4a4038));
+      // ExtrudeGeometry is non-indexed; normalize everything before merging.
+      const normalized = local.map(g => (g.index ? g.toNonIndexed() : g));
+      const geometry = ctx.track(mergeGeometries(normalized)!);
+      normalized.forEach(g => g.dispose());
+      local.forEach(g => g.dispose());
+      const mesh = new THREE.Mesh(geometry, hullMaterial);
+      mesh.castShadow = true;
+      root.add(mesh);
+      root.position.set(bx, -.58, bz);
+      root.rotation.y = heading;
+      ctx.world.add(root);
+      this.boats.push({ root, base: -.58, phase: i * 2.1 });
+    });
   }
 
   // True while a raised boom is over this feeder's yard — used to keep the
@@ -389,6 +465,11 @@ export class Fleet {
   // wheel roll, suspension, parking pose, boom and outriggers, light materials.
   update(state: State, fraction: number, now: number, dt: number, nightness: number): void {
     const reduced = this.ctx.reduced.matches;
+    // Moored boats: gentle bob + roll, pinned flat under reduced motion.
+    for (const boat of this.boats) {
+      boat.root.position.y = boat.base + (reduced ? 0 : Math.sin(now * .8 + boat.phase) * .035);
+      boat.root.rotation.z = reduced ? 0 : Math.sin(now * .55 + boat.phase * 1.3) * .018;
+    }
     for (const [index, id] of CREW_IDS.entries()) {
       const crew = state.crews[id];
       const truck = this.trucks.get(id)!;
