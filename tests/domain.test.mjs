@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, execute, advance, capacity, connectedLoad, serviceStatus, nextTransition, stateHash, phase } from '../src/domain.ts';
-import { worldMinutes, formatWorldTime, formatDuration, dayPhase } from '../src/scenario.ts';
+import { worldMinutes, formatWorldTime, formatDuration, dayPhase, SCENARIOS } from '../src/scenario.ts';
 import { replay } from '../src/history.ts';
 import { Clock } from '../src/clock.ts';
 
@@ -232,21 +232,22 @@ test('durations format as hours and minutes with negative clamping', () => {
 });
 
 test('world clock maps ticks to 19:30 dusk through 06:30 day', () => {
-  assert.equal(worldMinutes(0), 19 * 60 + 30);
-  assert.equal(formatWorldTime(0), '19:30');
-  assert.equal(dayPhase(0), 'dusk');
-  assert.equal(formatWorldTime(60), '20:30');
-  assert.equal(dayPhase(60), 'night');
-  assert.equal(formatWorldTime(240), '23:30');
-  assert.equal(dayPhase(240), 'night');
-  assert.equal(formatWorldTime(480), '03:30');
-  assert.equal(dayPhase(480), 'night');
-  assert.equal(formatWorldTime(600), '05:30');
-  assert.equal(dayPhase(600), 'dawn');
-  assert.equal(formatWorldTime(660), '06:30');
-  assert.equal(dayPhase(660), 'day');
-  assert.equal(dayPhase(30), 'dusk');
-  assert.equal(dayPhase(570), 'dawn');
+  const start = SCENARIOS['storm-01'].worldStart;
+  assert.equal(worldMinutes(0, start), 19 * 60 + 30);
+  assert.equal(formatWorldTime(0, start), '19:30');
+  assert.equal(dayPhase(0, start), 'dusk');
+  assert.equal(formatWorldTime(60, start), '20:30');
+  assert.equal(dayPhase(60, start), 'night');
+  assert.equal(formatWorldTime(240, start), '23:30');
+  assert.equal(dayPhase(240, start), 'night');
+  assert.equal(formatWorldTime(480, start), '03:30');
+  assert.equal(dayPhase(480, start), 'night');
+  assert.equal(formatWorldTime(600, start), '05:30');
+  assert.equal(dayPhase(600, start), 'dawn');
+  assert.equal(formatWorldTime(660, start), '06:30');
+  assert.equal(dayPhase(660, start), 'day');
+  assert.equal(dayPhase(30, start), 'dusk');
+  assert.equal(dayPhase(570, start), 'dawn');
 });
 
 test('generated command sequences preserve capacity, rejection immutability and replay', () => {

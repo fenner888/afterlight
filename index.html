@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#11191e" />
     <meta name="description" content="A one-screen systems puzzle. Two crews, a coastal district, and a choice about what comes back first." />
-    <title>AFTERLIGHT — Storm 01</title>
+    <title>AFTERLIGHT</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
   <body>
@@ -13,8 +13,9 @@
     <div id="app">
       <header class="masthead">
         <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>AFTERLIGHT</h1></div>
-        <div class="incident-label"><span class="eyebrow">INCIDENT 01</span><span>After the storm</span></div>
+        <div class="incident-label"><span class="eyebrow" id="incident-number">INCIDENT 01</span><span id="incident-title">After the storm</span></div>
         <div class="header-status"><span id="mode" class="status-tag">PAUSED</span><time id="world-time" aria-label="World time">DUSK · 19:30</time></div>
+        <button id="incidents" class="quiet-button">Incidents</button>
         <button id="sound-toggle" class="quiet-button" aria-pressed="false">Sound off</button>
         <button id="restart" class="quiet-button">Restart</button>
       </header>
@@ -83,7 +84,10 @@
       </section>
       <footer class="footer"><p>Fictional game units. Not electrical engineering or emergency advice.</p><details id="diagnostics"><summary>Diagnostics</summary><p>Simulation time <time id="time" aria-label="Simulation time">00:00</time></p><p id="metrics">Collecting runtime frame samples.</p><p><button id="step" title="Advance one simulated second while paused">+1 second</button> Keyboard: Space play/pause · N next event · R replay · M sound · 1–9 select node · ←/→ rotate · ↑/↓ tilt · +/− zoom · 0 reset view · Escape closes panels.</p><p>No saves, shared URLs or analytics. Restart clears this run. Reduced motion follows your system preference.</p></details></footer>
     </div>
-    <dialog id="briefing" aria-labelledby="briefing-title"><h2 id="briefing-title">Storm 01 — After the storm</h2><ol class="briefing-beats"><li>19:30. A storm has knocked out both feeders into the harbor district. Every building is dark.</li><li>The clinic is on its generator — 6 hours of fuel, until about 01:30. Nothing else has backup.</li><li>Two crews wait at the depot. Feeder A is the quick fix (3h, 6 of the 13 units the district needs). Feeder B is slow (7h, the other 7).</li><li>When power returns there won't be enough for everyone. You decide who gets it first.</li></ol><div class="dialog-actions"><button id="skip-briefing">Skip</button><button id="begin" class="primary-action" autofocus>Begin</button></div></dialog>
+    <dialog id="briefing" aria-labelledby="briefing-title">
+      <div id="incident-picker"><h2 id="briefing-title">Choose an incident</h2><div id="incident-cards" class="incident-cards"></div></div>
+      <div id="incident-briefing" hidden><h2 id="storm-title">Storm 01 — After the storm</h2><ol id="briefing-beats" class="briefing-beats"></ol><div class="dialog-actions"><button id="picker-back">Back</button><button id="skip-briefing">Skip</button><button id="begin" class="primary-action" autofocus>Begin</button></div></div>
+    </dialog>
     <dialog id="restart-dialog" aria-labelledby="restart-title"><h2 id="restart-title">Restart Storm 01?</h2><p>This clears the current in-memory run and its replay. There are no saved runs.</p><div class="dialog-actions"><button id="cancel-restart" autofocus>Keep this run</button><button id="confirm-restart" class="primary-action">Clear run and restart</button></div></dialog>
     <noscript><p>AFTERLIGHT requires JavaScript for its local simulation. No account or API key is needed.</p></noscript>
     <script type="module" src="/src/main.ts"></script>

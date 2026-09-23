@@ -1,14 +1,14 @@
-import { CREW_IDS, FEEDER_IDS, SERVICE_IDS, SERVICES, FEEDERS, SCENARIO, LABELS, isService, isCrew, isFeeder, validateScenario } from './scenario.ts';
-import type { CrewId, FeederId, ServiceId, NodeId } from './scenario.ts';
+import { CREW_IDS, FEEDER_IDS, SERVICE_IDS, SERVICES, SCENARIOS, LABELS, upstreamCapacity, depotTravel, crossTravel, isService, isCrew, isFeeder, validateScenario, formatWorldTime } from './scenario.ts';
+import type { CrewId, FeederId, ServiceId, NodeId, ScenarioId, ScenarioConfig } from './scenario.ts';
 
 export type Action = { type: 'dispatch'; crew: CrewId; target: FeederId } | { type: 'reconnect' | 'disconnect'; target: ServiceId };
 export type Command = Action & { tick: number; sequence: number };
-export type EventKind = 'incident' | 'dispatched' | 'arrived' | 'repaired' | 'reconnected' | 'disconnected' | 'backup-expired';
+export type EventKind = 'incident' | 'dispatched' | 'arrived' | 'repaired' | 'reconnected' | 'disconnected' | 'backup-expired' | 'returned';
 export type DomainEvent = { id: number; tick: number; kind: EventKind; node: NodeId; text: string };
 export type ServiceState = { connected: boolean; backupRemaining: number; backupUsed: number; downtime: number };
-export type CrewState = { phase: 'idle' | 'traveling' | 'repairing'; location: 'depot' | FeederId; origin: 'depot' | FeederId; target: FeederId | null; departedAt: number; arriveAt: number; completeAt: number };
+export type CrewState = { phase: 'idle' | 'traveling' | 'repairing' | 'away'; location: 'depot' | FeederId; origin: 'depot' | FeederId; target: FeederId | null; departedAt: number; arriveAt: number; completeAt: number; returnAt: number };
 export type State = {
-  scenario: typeof SCENARIO.id; version: number; seed: number; tick: number;
+  scenario: ScenarioId; version: number; seed: number; tick: number;
   services: Record<ServiceId, ServiceState>;
   feeders: Record<FeederId, 'faulted' | 'reserved' | 'repairing' | 'repaired'>;
   crews: Record<CrewId, CrewState>;
@@ -17,19 +17,26 @@ export type State = {
 };
 export type Result = { ok: boolean; state: State; message: string };
 
-export function initialState(): State {
-  validateScenario();
+const configOf = (state: State): ScenarioConfig => SCENARIOS[state.scenario];
+
+export function initialState(id: ScenarioId = 'storm-01'): State {
+  const config = SCENARIOS[id];
+  validateScenario(config);
   return {
-    scenario: SCENARIO.id, version: SCENARIO.version, seed: SCENARIO.seed, tick: 0,
-    services: Object.fromEntries(SERVICE_IDS.map(id => [id, { connected: false, backupRemaining: SERVICES[id].backup, backupUsed: 0, downtime: 0 }])) as State['services'],
+    scenario: id, version: config.version, seed: config.seed, tick: 0,
+    services: Object.fromEntries(SERVICE_IDS.map(service => [service, { connected: false, backupRemaining: config.backup[service], backupUsed: 0, downtime: 0 }])) as State['services'],
     feeders: { 'feeder-a': 'faulted', 'feeder-b': 'faulted' },
-    crews: Object.fromEntries(CREW_IDS.map(id => [id, { phase: 'idle', location: 'depot', origin: 'depot', target: null, departedAt: 0, arriveAt: 0, completeAt: 0 }])) as State['crews'],
+    crews: Object.fromEntries(CREW_IDS.map(crew => [crew, {
+      phase: config.returnAt[crew] > 0 ? 'away' : 'idle',
+      location: 'depot', origin: 'depot', target: null,
+      departedAt: 0, arriveAt: 0, completeAt: 0, returnAt: config.returnAt[crew],
+    }])) as State['crews'],
     commands: [],
-    events: [{ id: 0, tick: 0, kind: 'incident', node: 'supply', text: 'Storm 01: both feeders faulted. Clinic operating on backup.' }],
+    events: [{ id: 0, tick: 0, kind: 'incident', node: 'supply', text: config.incidentText }],
   };
 }
 
-export const capacity = (state: State): number => Math.min(SCENARIO.upstreamCapacity, FEEDER_IDS.reduce((sum, id) => sum + (state.feeders[id] === 'repaired' ? FEEDERS[id].capacity : 0), 0));
+export const capacity = (state: State): number => Math.min(upstreamCapacity, FEEDER_IDS.reduce((sum, id) => sum + (state.feeders[id] === 'repaired' ? configOf(state).feeders[id].capacity : 0), 0));
 export const connectedLoad = (state: State): number => SERVICE_IDS.reduce((sum, id) => sum + (state.services[id].connected ? SERVICES[id].load : 0), 0);
 export const serviceStatus = (state: State, id: ServiceId): 'grid' | 'backup' | 'offline' => state.services[id].connected ? 'grid' : state.services[id].backupRemaining > 0 ? 'backup' : 'offline';
 export type Phase = 'dispatch' | 'restore' | 'restored';
@@ -54,12 +61,15 @@ function parseCommand(raw: unknown): Command | null {
 }
 
 export function execute(state: State, raw: unknown): Result {
+  const config = configOf(state);
   const command = parseCommand(raw);
   const reject = (message: string): Result => ({ ok: false, state, message });
   if (!command) return reject('Invalid command. Check the action, target and finite integer timing.');
   if (command.tick !== state.tick || command.sequence !== state.commands.length) return reject('Stale command. Inspect the current tick and try again.');
   if (command.type === 'dispatch') {
-    if (state.crews[command.crew].phase !== 'idle') return reject(`${LABELS[command.crew]} is busy. Repairs cannot be cancelled or reassigned.`);
+    const crew = state.crews[command.crew];
+    if (crew.phase === 'away') return reject(`${LABELS[command.crew]} is still on another job — back at ${formatWorldTime(crew.returnAt, config.worldStart)}.`);
+    if (crew.phase !== 'idle') return reject(`${LABELS[command.crew]} is busy. Repairs cannot be cancelled or reassigned.`);
     if (state.feeders[command.target] !== 'faulted') return reject(`${LABELS[command.target]} is already assigned or repaired.`);
   } else {
     const service = state.services[command.target];
@@ -78,8 +88,8 @@ export function execute(state: State, raw: unknown): Result {
     crew.target = command.target;
     crew.phase = 'traveling';
     crew.departedAt = state.tick;
-    crew.arriveAt = state.tick + (crew.location === 'depot' ? SCENARIO.depotTravel : SCENARIO.crossTravel);
-    crew.completeAt = crew.arriveAt + FEEDERS[command.target].repairTicks;
+    crew.arriveAt = state.tick + (crew.location === 'depot' ? depotTravel : crossTravel);
+    crew.completeAt = crew.arriveAt + config.feeders[command.target].repairTicks;
     next.feeders[command.target] = 'reserved';
     record(next, 'dispatched', command.target, `${LABELS[command.crew]} dispatched to ${LABELS[command.target]}.`);
   } else {
@@ -94,6 +104,7 @@ export function nextTransition(state: State): number | null {
   const ticks: number[] = [];
   for (const id of CREW_IDS) {
     const crew = state.crews[id];
+    if (crew.phase === 'away') ticks.push(crew.returnAt);
     if (crew.phase === 'traveling') ticks.push(crew.arriveAt);
     if (crew.phase === 'repairing') ticks.push(crew.completeAt);
   }
@@ -108,6 +119,7 @@ export function advance(state: State, targetTick: number): State {
   if (!Number.isSafeInteger(targetTick) || targetTick < state.tick) throw new Error('Advance requires a finite integer tick at or after the current tick.');
   if (targetTick === state.tick) return state;
   const next = structuredClone(state);
+  const config = configOf(next);
   while (next.tick < targetTick) {
     const boundary = Math.min(targetTick, nextTransition(next) ?? targetTick);
     const elapsed = boundary - next.tick;
@@ -124,6 +136,11 @@ export function advance(state: State, targetTick: number): State {
     next.tick = boundary;
     for (const id of CREW_IDS) {
       const crew = next.crews[id];
+      if (crew.phase === 'away' && crew.returnAt === boundary) due.push({ key: id, run: () => {
+        crew.phase = 'idle';
+        crew.returnAt = 0;
+        record(next, 'returned', 'depot', `${LABELS[id]} is back at the depot.`);
+      } });
       const target = crew.target;
       if (target === null) continue;
       if (crew.phase === 'traveling' && crew.arriveAt === boundary) due.push({ key: `${target}/${id}`, run: () => {
@@ -136,7 +153,7 @@ export function advance(state: State, targetTick: number): State {
         crew.phase = 'idle';
         crew.target = null;
         next.feeders[target] = 'repaired';
-        record(next, 'repaired', target, `${LABELS[target]} repaired · +${FEEDERS[target].capacity} CU. Services remain disconnected until you reconnect them.`);
+        record(next, 'repaired', target, `${LABELS[target]} repaired · +${config.feeders[target].capacity} CU. Services remain disconnected until you reconnect them.`);
       } });
     }
     due.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0).forEach(item => item.run());

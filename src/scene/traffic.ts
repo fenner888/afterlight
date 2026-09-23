@@ -3,7 +3,7 @@ import type { FeederId } from '../scenario.ts';
 // Traffic awareness — pure route/yield logic, no three.js (Node-testable).
 // Heading convention matches vehicles.ts: forward = (cos h, -sin h), so a route
 // segment (dx,dz) has heading -atan2(dz, dx). Truck local +x is the nose.
-export type Point = { x: number; z: number };
+export type Point = { x: number; z: number; reverse?: boolean };
 export type Pose = Point & { heading: number };
 
 // Real truck footprint from buildTruck: length 1.9, width .78 (stripe is the
@@ -79,6 +79,41 @@ export function routeFor(index: 0 | 1, origin: 'depot' | FeederId, target: Feede
   ];
 }
 
+// An away crew drives in over the last 30 ticks before its returnAt.
+export const RETURN_DRIVE = 30;
+
+// Return drive for a crew coming back from an outside job: enters on the main
+// road's westbound lane at the east end, turns down the access road and along
+// the apron, then backs straight into its nose-out bay. The final vertex's
+// `reverse` flag keeps the nose facing south while the truck travels north.
+export function returnRoute(index: 0 | 1): Point[] {
+  const bay = depotBay(index);
+  return [
+    { x: 12.25, z: MAIN_N },
+    { x: ACCESS_X, z: MAIN_N },
+    { x: ACCESS_X, z: APRON_Z },
+    { x: bay.x, z: APRON_Z },
+    { x: bay.x, z: bay.z, reverse: true },
+  ];
+}
+
+// The contested depot zone: the single-lane access road with its junction
+// mouth, plus the apron pad. Bays sit just outside so a departure waiting for
+// an inbound truck holds at the door instead of blocking the yard. Only the
+// returning crew's drive reserves it — normal departures keep the corridor
+// rules.
+export function inDepotZone(p: Point): boolean {
+  return (Math.abs(p.x - ACCESS_X) < 1.05 && p.z > 1.2 && p.z < 7.0)
+    || (p.x > -6.3 && p.x < .9 && p.z > 7.1 && p.z < 9.55);
+}
+
+// The east junction is the other contested crossing: the returner's westbound
+// lane crosses the Feeder-B route where it turns north onto the east road.
+// Sized so a waiting truck holds a full body-length clear of the crossing.
+export function inEastJunction(p: Point): boolean {
+  return p.x > 7 && p.x < 9.8 && p.z > .9 && p.z < 2.9;
+}
+
 export function routeLength(points: Point[]): number {
   let total = 0;
   for (let i = 1; i < points.length; i++) total += Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.z - points[i - 1]!.z);
@@ -93,7 +128,10 @@ export function poseAt(points: Point[], distance: number): Pose {
   for (let i = 1; i < points.length; i++) {
     const from = points[i - 1]!, to = points[i]!;
     const length = Math.hypot(to.x - from.x, to.z - from.z);
-    const heading = length ? -Math.atan2(to.z - from.z, to.x - from.x) : 0;
+    // A `reverse` segment drives backward: the nose stays opposite the travel
+    // direction (e.g. a truck stays nose-south while backing into its bay).
+    let heading = length ? -Math.atan2(to.z - from.z, to.x - from.x) : 0;
+    if (to.reverse) heading += heading > 0 ? -Math.PI : Math.PI;
     if (remaining <= length || i === points.length - 1) {
       const t = length ? Math.min(1, remaining / length) : 0;
       return { x: from.x + (to.x - from.x) * t, z: from.z + (to.z - from.z) * t, heading };
@@ -128,6 +166,7 @@ export type TruckInput = {
   priority: number;             // lower wins: departedAt * 2 + crew index
   snap: boolean;                // replay / reduced motion / time jumps
   parked: Pose | null;          // pose to hold while route is null
+  returning?: boolean;          // inbound depot return drive (reserves the zone)
 };
 
 // How far ahead (seconds of projected motion on both routes) a truck checks
@@ -174,7 +213,7 @@ export class Traffic {
         shown = input.scheduleDistance;
       } else {
         let next = Math.min(shown + 1.6 * input.nominalSpeed * dt, input.scheduleDistance, len);
-        if (next > shown + EPS && this.conflicts(trucks, lens, i, next)) next = shown;
+        if (next > shown + EPS && this.conflicts(trucks, lens, i, next, this.poseOf(i))) next = shown;
         shown = next;
       }
       this.shown[i] = shown;
@@ -198,8 +237,64 @@ export class Traffic {
   // Would advancing truck i to `next` put its footprint over a higher-priority
   // moving truck's path? Checks the immediate next pose plus projected poses
   // through the lookahead window on both routes.
-  private conflicts(trucks: TruckInput[], lens: number[], i: number, next: number): boolean {
+  private conflicts(trucks: TruckInput[], lens: number[], i: number, next: number, from: Pose): boolean {
     const me = trucks[i]!;
+    const candidate = poseAt(me.route!, next);
+    const candidateInZone = inDepotZone(candidate);
+    // Universal don't-ram: never advance into another truck's current body,
+    // whatever the priority. Real body dims — lane passing stays legal.
+    for (let j = 0; j < trucks.length; j++) {
+      if (j !== i && footprintsOverlap(candidate, this.poseOf(j), TRUCK_LENGTH, TRUCK_WIDTH)) return true;
+    }
+    // Shared crossings are first-come: whoever is inside proceeds, a new
+    // entrant waits outside — an occupant can always drive out, so no
+    // deadlock.
+    if (inEastJunction(candidate)) {
+      for (let j = 0; j < trucks.length; j++) {
+        if (j !== i && inEastJunction(this.poseOf(j))) return true;
+      }
+    }
+    // Depot-zone rules sit above priority: an active return drive reserves the
+    // single-lane yard, so a new departure waits at its bay; a truck already
+    // inside is grandfathered and clears. The inbound truck waits outside the
+    // mouth until whoever is inside has left — a departure cannot reverse out
+    // of its way, and the zone is too tight for corridor margins to arbitrate.
+    if (me.returning) {
+      if (candidateInZone) {
+        for (let j = 0; j < trucks.length; j++) {
+          if (j !== i && inDepotZone(this.poseOf(j))) return true;
+        }
+      }
+      // A returner yields by centreline distance, not footprint: the two main-
+      // road lanes are only .8 apart — narrower than the yield margin — so an
+      // eastbound truck may legally pass abreast while the returner keeps a
+      // real-body clearance. It still holds for a leader on its own line.
+      for (let j = 0; j < trucks.length; j++) {
+        if (j === i) continue;
+        const other = trucks[j]!;
+        if (other.priority >= me.priority) continue;
+        if (!other.route || this.shown[j]! >= lens[j]! - EPS) continue;
+        for (let d = 0; d <= lens[j]! - this.shown[j]!; d += .25) {
+          const pj = poseAt(other.route, this.shown[j]! + d);
+          if (Math.hypot(candidate.x - pj.x, candidate.z - pj.z) < .55) return true;
+        }
+      }
+      return false;
+    }
+    if (candidateInZone) {
+      if (!inDepotZone(from)) {
+        for (let j = 0; j < trucks.length; j++) {
+          const other = trucks[j]!;
+          if (j !== i && other.returning && other.route && this.shown[j]! < lens[j]! - EPS) return true;
+        }
+      }
+      // Inside the yard the corridor check is suspended, so keep a direct
+      // footprint gap to whatever is in front — convoying is fine, touching
+      // is not.
+      for (let j = 0; j < trucks.length; j++) {
+        if (j !== i && footprintsOverlap(candidate, this.poseOf(j), FOOT_LENGTH, FOOT_WIDTH)) return true;
+      }
+    }
     for (let j = 0; j < trucks.length; j++) {
       if (j === i) continue;
       const other = trucks[j]!;
@@ -207,23 +302,30 @@ export class Traffic {
       if (!other.route || this.shown[j]! >= lens[j]! - EPS) continue; // only moving trucks
       const vi = 1.6 * me.nominalSpeed;
       const vj = 1.6 * other.nominalSpeed;
-      const candidate = poseAt(me.route!, next);
       // My candidate vs the other truck's entire remaining corridor — I may
       // only occupy poses its path will never cover, so a held truck can never
-      // be overrun from behind. My footprint carries the yield margin.
-      for (let d = 0; d <= lens[j]! - this.shown[j]!; d += .25) {
-        const pj = poseAt(other.route, this.shown[j]! + d);
-        if (footprintsOverlap(candidate, pj, YIELD_LENGTH, YIELD_WIDTH, FOOT_LENGTH, FOOT_WIDTH)) return true;
-      }
-      // Both projected forward through the lookahead window — keeps a following
-      // truck off the leader's tail in a shared corridor.
-      for (let s = 0; s <= SAMPLES; s++) {
-        const t = LOOKAHEAD * s / SAMPLES;
-        const pi = poseAt(me.route!, Math.min(next + vi * t, lens[i]!));
-        const pj = poseAt(other.route, Math.min(this.shown[j]! + vj * t, lens[j]!));
-        if (footprintsOverlap(pi, pj, YIELD_LENGTH, YIELD_WIDTH)) return true;
+      // be overrun from behind. My footprint carries the yield margin. Inside
+      // the depot zone the zone rules above decide instead — corridor margins
+      // are wider than the yard is and would deadlock a queued departure.
+      if (!candidateInZone) {
+        for (let d = 0; d <= lens[j]! - this.shown[j]!; d += .25) {
+          const pj = poseAt(other.route, this.shown[j]! + d);
+          if (footprintsOverlap(candidate, pj, YIELD_LENGTH, YIELD_WIDTH, FOOT_LENGTH, FOOT_WIDTH)) return true;
+        }
+        // Both projected forward through the lookahead window — keeps a
+        // following truck off the leader's tail in a shared corridor.
+        for (let s = 0; s <= SAMPLES; s++) {
+          const t = LOOKAHEAD * s / SAMPLES;
+          const pi = poseAt(me.route!, Math.min(next + vi * t, lens[i]!));
+          const pj = poseAt(other.route, Math.min(this.shown[j]! + vj * t, lens[j]!));
+          if (footprintsOverlap(pi, pj, YIELD_LENGTH, YIELD_WIDTH)) return true;
+        }
       }
     }
     return false;
+  }
+
+  private poseOf(index: number): Pose {
+    return this.poses[index] ?? { x: 0, z: 0, heading: 0 };
   }
 }

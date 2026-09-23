@@ -180,7 +180,7 @@ export class Sound {
     this.ramp('wind', storm * .075);
     this.ramp('generator', serviceStatus(state, 'clinic') === 'backup' ? .08 : 0);
     for (const id of FEEDER_IDS) this.ramp(`hum:${id}`, state.feeders[id] === 'repaired' ? .04 : 0);
-    this.ramp('engine', CREW_IDS.some(id => state.crews[id].phase === 'traveling') ? .09 : 0);
+    this.ramp('engine', CREW_IDS.some(id => state.crews[id].phase === 'traveling' || (state.crews[id].phase === 'away' && state.tick >= state.crews[id].returnAt - 30)) ? .09 : 0);
     if (CREW_IDS.some(id => state.crews[id].phase === 'repairing') && now >= this.nextCrackle) {
       this.nextCrackle = now + .18 + ((state.tick * 37) % 10) / 22;
       this.crackle();

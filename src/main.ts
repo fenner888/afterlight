@@ -6,8 +6,8 @@ import { replay } from './history.ts';
 import { DistrictScene } from './scene/index.ts';
 import { Sound } from './audio.ts';
 import type { Cue } from './audio.ts';
-import { SERVICES, FEEDERS, SERVICE_IDS, FEEDER_IDS, NODE_IDS, CREW_IDS, LABELS, SCENARIO, isNode, isService, isFeeder, formatTime, formatDuration, formatWorldTime, dayPhase } from './scenario.ts';
-import type { NodeId, ServiceId, CrewId } from './scenario.ts';
+import { SERVICES, SERVICE_IDS, FEEDER_IDS, NODE_IDS, CREW_IDS, LABELS, SCENARIOS, SCENARIO_IDS, upstreamCapacity, depotTravel, crossTravel, isNode, isService, isFeeder, formatTime, formatDuration, formatWorldTime, dayPhase, sunriseTick } from './scenario.ts';
+import type { NodeId, ServiceId, CrewId, ScenarioId, ScenarioConfig } from './scenario.ts';
 
 const element = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const result = document.getElementById(id);
@@ -17,7 +17,11 @@ const element = <T extends HTMLElement = HTMLElement>(id: string): T => {
 const text = (id: string, value: string): void => { element(id).textContent = value; };
 const button = (id: string): HTMLButtonElement => element<HTMLButtonElement>(id);
 type RunSummary = { downtimes: Record<ServiceId, number>; order: { tick: number; target: ServiceId }[]; backupRemaining: number; endTick: number };
-let live = initialState();
+let current: ScenarioId = 'storm-01';
+let live = initialState(current);
+const configOf = (state: State): ScenarioConfig => SCENARIOS[state.scenario];
+// World-clock shorthand — every helper takes the scenario's tick-0 minutes.
+const wt = (tick: number, state: State): string => formatWorldTime(tick, configOf(state).worldStart);
 let review: State | null = null;
 let selected: NodeId = 'clinic';
 const liveClock = new Clock();
@@ -36,7 +40,8 @@ let popoverReturnFocus: HTMLElement | null = null;
 let popoverKey = '';
 let summaryKey = '';
 let summaryDismissed = false;
-const completedRuns: RunSummary[] = [];
+// Latest completed runs per storm (in-memory only, kept for the comparison summary).
+const completedRuns: Record<ScenarioId, RunSummary[]> = { 'storm-01': [], 'storm-02': [], 'storm-03': [] };
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const frameSamples: number[] = [];
 const sound = new Sound();
@@ -163,6 +168,7 @@ function closePopover(): void {
 function updatePopover(): void {
   if (!popoverNode) return;
   const state = view();
+  const cfg = configOf(state);
   const id = popoverNode;
   const readOnly = review !== null || clock().pendingTicks > 0;
   text('popover-title', LABELS[id]);
@@ -173,9 +179,9 @@ function updatePopover(): void {
     const condition = state.feeders[id];
     const crewId = CREW_IDS.find(crew => state.crews[crew].target === id && state.crews[crew].phase !== 'idle');
     if (condition === 'faulted') {
-      status.textContent = `Faulted. +${FEEDERS[id].capacity} CU · ${formatDuration(SCENARIO.depotTravel)} travel · ${formatDuration(FEEDERS[id].repairTicks)} repair.`;
+      status.textContent = `Faulted. +${cfg.feeders[id].capacity} CU · ${formatDuration(depotTravel)} travel · ${formatDuration(cfg.feeders[id].repairTicks)} repair.`;
     } else if (condition === 'repaired') {
-      status.textContent = `Repaired · +${FEEDERS[id].capacity} CU online. Reconnect services to use it.`;
+      status.textContent = `Repaired · +${cfg.feeders[id].capacity} CU online. Reconnect services to use it.`;
     } else if (crewId) {
       const crew = state.crews[crewId];
       status.textContent = crew.phase === 'traveling'
@@ -184,9 +190,9 @@ function updatePopover(): void {
     }
   } else if (isService(id)) {
     const service = state.services[id];
-    status.textContent = `${statusNames[serviceStatus(state, id)]} · ${SERVICES[id].load} CU load${SERVICES[id].backup ? ` · backup ${formatDuration(service.backupRemaining)}` : ''} · downtime ${formatDuration(service.downtime)}`;
+    status.textContent = `${statusNames[serviceStatus(state, id)]} · ${SERVICES[id].load} CU load${cfg.backup[id] ? ` · backup ${formatDuration(service.backupRemaining)}` : ''} · downtime ${formatDuration(service.downtime)}`;
   } else {
-    status.textContent = id === 'supply' ? 'Intact · 13 CU source feeding the shared district bus.' : 'Crew origin · two crews, no service load.';
+    status.textContent = id === 'supply' ? `Intact · ${upstreamCapacity} CU source feeding the shared district bus.` : 'Crew origin · no service load.';
   }
   const key = `${id}|${isFeeder(id) ? state.feeders[id] : isService(id) ? String(state.services[id].connected) : ''}|${CREW_IDS.map(crew => `${state.crews[crew].phase}:${state.crews[crew].target}`).join('')}|${readOnly}|${capacity(state)}|${connectedLoad(state)}`;
   if (key !== popoverKey) {
@@ -197,9 +203,11 @@ function updatePopover(): void {
     if (isFeeder(id) && state.feeders[id] === 'faulted') {
       for (const crew of CREW_IDS) {
         const action = document.createElement('button');
-        const busy = state.crews[crew].phase !== 'idle';
+        const crewState = state.crews[crew];
+        const away = crewState.phase === 'away';
+        const busy = crewState.phase !== 'idle';
         action.dataset.crew = crew;
-        action.textContent = busy ? `${LABELS[crew]} · busy at ${LABELS[state.crews[crew].target!]}` : `Send ${LABELS[crew]}`;
+        action.textContent = away ? `${LABELS[crew]} · back ${wt(crewState.returnAt, state)}` : busy ? `${LABELS[crew]} · busy at ${LABELS[crewState.target!]}` : `Send ${LABELS[crew]}`;
         action.disabled = busy || readOnly;
         if (!busy) action.addEventListener('click', () => command({ type: 'dispatch', crew, target: id }));
         actions.append(action);
@@ -263,31 +271,42 @@ function positionPopover(): void {
 }
 
 function taskText(state: State): string {
+  const cfg = configOf(state);
   const current = phase(state);
-  if (current === 'restored') return `Every light is back on at ${formatWorldTime(state.tick)}. Watch the sun come up, or review your run.`;
-  const crewsOut = CREW_IDS.filter(id => state.crews[id].phase !== 'idle');
+  if (current === 'restored') return `Every light is back on at ${wt(state.tick, state)}. Watch the sun come up, or review your run.`;
+  const working = CREW_IDS.filter(id => state.crews[id].phase === 'traveling' || state.crews[id].phase === 'repairing');
+  const idle = CREW_IDS.filter(id => state.crews[id].phase === 'idle');
+  const away = CREW_IDS.filter(id => state.crews[id].phase === 'away');
+  const awayNote = away.length ? ` ${LABELS[away[0]!]} is back at ${wt(state.crews[away[0]!].returnAt, state)}.` : '';
   const clinic = state.services.clinic;
-  const generator = !clinic.connected && clinic.backupRemaining > 0 ? ` Clinic generator until ${formatWorldTime(state.tick + clinic.backupRemaining)}.` : '';
+  const generator = !clinic.connected && clinic.backupRemaining > 0 ? ` Clinic generator until ${wt(state.tick + clinic.backupRemaining, state)}.` : '';
+  const rolling = (id: CrewId): string => `${LABELS[id]} ${state.crews[id].phase === 'traveling' ? 'is rolling to' : 'is repairing'} ${LABELS[state.crews[id].target!]}.`;
   if (current === 'dispatch') {
-    if (crewsOut.length === 0) return 'Send both crews — click a broken feeder on the map.';
-    const crew = state.crews[crewsOut[0]!];
-    const idleCrew = CREW_IDS.find(id => state.crews[id].phase === 'idle');
+    if (working.length === 0) {
+      if (away.length && idle.length === 1) return `Send ${LABELS[idle[0]!]} — click a broken feeder.${awayNote}`;
+      return 'Send both crews — click a broken feeder on the map.';
+    }
+    const idleCrew = idle[0];
     const openFeeder = FEEDER_IDS.find(id => state.feeders[id] === 'faulted');
-    const next = idleCrew && openFeeder ? ` Send ${LABELS[idleCrew]} to ${LABELS[openFeeder]} — the longer it waits, the later that repair finishes.` : '';
-    return `${LABELS[crewsOut[0]!]} is rolling to ${LABELS[crew.target!]}.${next}`;
+    const next = idleCrew && openFeeder ? ` Send ${LABELS[idleCrew]} to ${LABELS[openFeeder]} — the longer it waits, the later that repair finishes.` : awayNote;
+    return `${rolling(working[0]!)}${next}`;
+  }
+  // A crew is away while the other is out — call out the return time.
+  if (away.length && working.length === 1 && state.crews[working[0]!].phase === 'traveling') {
+    return `${rolling(working[0]!)}${awayNote}`;
   }
   if (capacity(state) === 0) {
     const estimate = (id: (typeof FEEDER_IDS)[number]): string => {
-      const crew = crewsOut.map(crew => state.crews[crew]).find(crew => crew.target === id);
-      return formatWorldTime(crew ? crew.completeAt : state.tick + SCENARIO.depotTravel + FEEDERS[id].repairTicks);
+      const crew = working.map(crew => state.crews[crew]).find(crew => crew.target === id);
+      return wt(crew ? crew.completeAt : state.tick + depotTravel + cfg.feeders[id].repairTicks, state);
     };
     const estimates = FEEDER_IDS
       .filter(id => state.feeders[id] === 'reserved' || state.feeders[id] === 'repairing')
       .map(id => `${LABELS[id]} due ${estimate(id)}`);
-    return `Crews working. ${estimates.join(' · ') || 'Repairs underway'}.${generator}`;
+    return `Crews working. ${estimates.join(' · ') || 'Repairs underway'}.${generator}${awayNote}`;
   }
   const free = capacity(state) - connectedLoad(state);
-  return `${free} of ${capacity(state)} units free. Click a dark building to reconnect it.${generator}`;
+  return `${free} of ${capacity(state)} units free. Click a dark building to reconnect it.${generator}${awayNote}`;
 }
 
 function showDecision(title: string, guidance: string, label = 'Resume', cueName: Cue = 'decision'): void {
@@ -298,7 +317,7 @@ function showDecision(title: string, guidance: string, label = 'Resume', cueName
   text('resume', label);
   element('decision').hidden = false;
   fireCue(cueName);
-  feedback(`Paused at ${formatWorldTime(live.tick)} — ${title}.`);
+  feedback(`Paused at ${wt(live.tick, live)} — ${title}.`);
 }
 
 function resumeLive(): void {
@@ -327,13 +346,23 @@ function decisionCheck(before: State, after: State): boolean {
         guidance = 'Enough for everyone. Reconnect every building still dark.';
       } else {
         const clauses: string[] = [];
-        if (!clinic.connected && clinic.backupRemaining > 0) clauses.push(`The clinic generator runs out at ${formatWorldTime(after.tick + clinic.backupRemaining)}`);
-        if (otherCrew) clauses.push(`${LABELS[other]} isn't due until ${formatWorldTime(otherCrew.completeAt)}`);
-        guidance = `Not enough for everyone (${SCENARIO.upstreamCapacity} needed).`;
+        if (!clinic.connected && clinic.backupRemaining > 0) clauses.push(`The clinic generator runs out at ${wt(after.tick + clinic.backupRemaining, after)}`);
+        if (otherCrew) clauses.push(`${LABELS[other]} isn't due until ${wt(otherCrew.completeAt, after)}`);
+        guidance = `Not enough for everyone (${upstreamCapacity} needed).`;
         if (clauses.length) guidance += ` ${clauses.join('; ')}.`;
         guidance += ' Click buildings to reconnect, then Resume.';
       }
       showDecision(`${LABELS[id]} is back — ${online} units online`, guidance);
+      return true;
+    }
+  }
+  // An away crew coming home pauses like any other decision point; when a
+  // feeder still needs a crew, open its popover with the Send button focused.
+  for (const id of CREW_IDS) {
+    if (before.crews[id].phase === 'away' && after.crews[id].phase === 'idle') {
+      const openFeeder = FEEDER_IDS.find(feeder => after.feeders[feeder] === 'faulted');
+      showDecision(`${LABELS[id]} is back at the depot`, openFeeder ? `Send it to ${LABELS[openFeeder]}.` : 'Both feeders are covered.');
+      if (openFeeder) activateNode(openFeeder);
       return true;
     }
   }
@@ -346,15 +375,19 @@ function decisionCheck(before: State, after: State): boolean {
   if (!backupWarned && !clinic.connected && previous.backupRemaining > 60 && clinic.backupRemaining > 0 && clinic.backupRemaining <= 60) {
     backupWarned = true;
     const free = capacity(after) - connectedLoad(after);
+    // The swap hint only applies when enough capacity exists to hold the
+    // clinic — e.g. Storm 03's 4-CU Feeder A fully occupied by other services.
+    const canSwap = capacity(after) >= SERVICES.clinic.load && free < SERVICES.clinic.load;
     showDecision(
       'Clinic generator: 1h of fuel left',
-      `At ${formatWorldTime(after.tick + clinic.backupRemaining)} the clinic goes dark unless it's reconnected.${free < SERVICES.clinic.load ? ` Disconnect another building to free ${SERVICES.clinic.load} units, or let it go.` : ''}`,
+      `At ${wt(after.tick + clinic.backupRemaining, after)} the clinic goes dark unless it's reconnected.${canSwap ? ` Disconnect another building to free ${SERVICES.clinic.load} units, or let it go.` : ''}`,
       'Resume',
       'backup-warn',
     );
     return true;
   }
-  if (phase(after) === 'restored' && before.tick < 660 && after.tick === 660) {
+  const sunrise = sunriseTick(configOf(after));
+  if (phase(after) === 'restored' && before.tick < sunrise && after.tick === sunrise) {
     showDecision('Dawn breaks over the district', 'The sun is up — the storm is over. Open the summary to review your run.', 'View summary', 'sunrise');
     return true;
   }
@@ -369,7 +402,8 @@ function advanceLive(ticks: number): void {
     const warn = backupWarnTick(live);
     if (transition !== null && transition < boundary) boundary = transition;
     if (warn !== null && warn < boundary) boundary = warn;
-    if (phase(live) === 'restored' && live.tick < 660 && 660 < boundary) boundary = 660;
+    const sunrise = sunriseTick(configOf(live));
+    if (phase(live) === 'restored' && live.tick < sunrise && sunrise < boundary) boundary = sunrise;
     const before = live;
     live = advance(live, boundary);
     if (decisionCheck(before, live)) break;
@@ -382,7 +416,7 @@ function sync(now = performance.now()): void {
   lastClockTime = currentTime;
   if (!ticks) return;
   if (review) {
-    review = replay(live.commands, Math.min(live.tick, review.tick + ticks));
+    review = replay(live.commands, Math.min(live.tick, review.tick + ticks), live.scenario);
     if (review.tick === live.tick) reviewClock.setRunning(false);
   } else advanceLive(ticks);
   refresh();
@@ -443,10 +477,11 @@ function renderSummary(): void {
   const panel = element('summary');
   panel.replaceChildren();
   const state = live;
+  const cfg = configOf(state);
   const title = document.createElement('h2');
   title.id = 'summary-title';
   title.tabIndex = -1;
-  title.textContent = 'Storm 01 — run complete';
+  title.textContent = `${cfg.subtitle} — run complete`;
   const sub = document.createElement('p');
   sub.className = 'summary-sub';
   sub.textContent = `All five services restored · total simulated time ${formatDuration(state.tick)} · clinic backup remaining ${formatDuration(state.services.clinic.backupRemaining)}`;
@@ -461,8 +496,9 @@ function renderSummary(): void {
   const table = document.createElement('table');
   const head = document.createElement('thead');
   const headRow = document.createElement('tr');
-  const runs = [...completedRuns, summarize(state)];
-  for (const label of ['Service', ...runs.map((_, i) => i === runs.length - 1 ? 'This run' : `Run ${i + 1}`)]) {
+  // Latest three runs of this storm side by side; the current run is last.
+  const runs = [...completedRuns[live.scenario].slice(-2), summarize(state)];
+  for (const label of ['Service', ...runs.map((_, i) => `Run ${i + 1}`)]) {
     const cell = document.createElement('th');
     cell.scope = 'col';
     cell.textContent = label;
@@ -484,19 +520,44 @@ function renderSummary(): void {
     }
     body.append(row);
   }
+  const restoredRow = document.createElement('tr');
+  const restoredName = document.createElement('th');
+  restoredName.scope = 'row';
+  restoredName.textContent = 'Fully restored';
+  restoredRow.append(restoredName);
+  for (const run of runs) {
+    const cell = document.createElement('td');
+    cell.textContent = wt(run.endTick, state);
+    restoredRow.append(cell);
+  }
+  body.append(restoredRow);
   table.append(head, body);
   const orderTitle = document.createElement('h3');
   orderTitle.textContent = 'RECONNECTION ORDER';
-  const order = document.createElement('ol');
-  for (const step of summarize(state).order) {
-    const item = document.createElement('li');
-    item.textContent = `${formatWorldTime(step.tick)} — ${LABELS[step.target]} · ${SERVICES[step.target].load} CU`;
-    order.append(item);
-  }
-  if (!order.children.length) {
-    const item = document.createElement('li');
-    item.textContent = 'No reconnections recorded.';
-    order.append(item);
+  const orderColumns = document.createElement('div');
+  orderColumns.className = 'order-columns';
+  for (const [index, run] of runs.entries()) {
+    const column = document.createElement('div');
+    column.className = 'order-col';
+    const runLabel = document.createElement('span');
+    runLabel.className = 'order-run';
+    runLabel.textContent = `Run ${index + 1}`;
+    column.append(runLabel);
+    if (!run.order.length) {
+      const empty = document.createElement('span');
+      empty.className = 'order-empty';
+      empty.textContent = 'No reconnections';
+      column.append(empty);
+    } else {
+      const list = document.createElement('ol');
+      for (const step of run.order) {
+        const item = document.createElement('li');
+        item.textContent = `${LABELS[step.target]} · ${wt(step.tick, state)}`;
+        list.append(item);
+      }
+      column.append(list);
+    }
+    orderColumns.append(column);
   }
   const actions = document.createElement('div');
   actions.className = 'summary-actions';
@@ -517,8 +578,12 @@ function renderSummary(): void {
   retry.addEventListener('click', () => {
     archiveRun();
     resetRun();
-    feedback('New Storm 01 run. Both crews are ready at the depot. Time is paused.');
+    feedback(`New ${cfg.subtitle} run. Time is paused.`);
   });
+  const another = document.createElement('button');
+  another.id = 'try-another';
+  another.textContent = 'Try another storm';
+  another.addEventListener('click', () => openPicker());
   const reviewButton = document.createElement('button');
   reviewButton.id = 'summary-replay';
   reviewButton.textContent = 'Review replay';
@@ -527,19 +592,21 @@ function renderSummary(): void {
   close.id = 'summary-close';
   close.textContent = 'Back to district';
   close.addEventListener('click', () => { summaryDismissed = true; element('summary').hidden = true; button('play').focus(); });
-  actions.append(sunrise, retry, reviewButton, close);
-  panel.append(downtimeTitle, table, orderTitle, order, actions);
+  actions.append(sunrise, retry, another, reviewButton, close);
+  panel.append(downtimeTitle, table, orderTitle, orderColumns, actions);
 }
 
 function archiveRun(): void {
   if (!liveArchived && phase(live) === 'restored') {
-    completedRuns.push(summarize(live));
+    const list = completedRuns[live.scenario];
+    list.push(summarize(live));
+    while (list.length > 3) list.shift();
     liveArchived = true;
   }
 }
 
 function resetRun(): void {
-  live = initialState();
+  live = initialState(current);
   review = null;
   liveClock.reset();
   reviewClock.reset();
@@ -559,6 +626,9 @@ function resetRun(): void {
 
 function refresh(): void {
   const state = view();
+  const cfg = configOf(state);
+  text('incident-number', `INCIDENT ${String(cfg.number).padStart(2, '0')}`);
+  text('incident-title', cfg.title);
   const newEvents = live.events.slice(eventCursor);
   eventCursor = live.events.length;
   if (!review) for (const event of newEvents) eventCue(event);
@@ -569,11 +639,11 @@ function refresh(): void {
   const catchingUp = currentClock.pendingTicks > 0;
   const readOnly = review !== null || catchingUp;
   text('time', formatTime(state.tick));
-  text('world-time', `${dayPhase(state.tick).toUpperCase()} · ${formatWorldTime(state.tick)}`);
+  text('world-time', `${dayPhase(state.tick, cfg.worldStart).toUpperCase()} · ${wt(state.tick, state)}`);
   text('mode', review ? 'REPLAY' : currentClock.running ? 'RUNNING' : 'PAUSED');
   text('load', String(load));
   text('capacity', String(available));
-  text('headroom', `${headroom} CU headroom · 13 CU demand`);
+  text('headroom', `${headroom} CU headroom · ${upstreamCapacity} CU demand`);
 
   picker.value = selected;
   text('node-number', String(NODE_IDS.indexOf(selected) + 1).padStart(2, '0'));
@@ -587,16 +657,18 @@ function refresh(): void {
     text('node-status', statusNames[status]);
     element('node-status').dataset.tone = status;
     text('node-flavor', definition.flavor);
-    text('node-description', definition.description);
+    text('node-description', selected === 'clinic'
+      ? `${formatDuration(cfg.backup.clinic)} of reserve. Grid power preserves what remains; it never recharges the backup.`
+      : definition.description ?? '');
     text('service-load', `${definition.load} CU`);
-    text('backup', definition.backup ? formatDuration(service.backupRemaining) : 'None');
+    text('backup', cfg.backup[selected] ? formatDuration(service.backupRemaining) : 'None');
     text('downtime', formatDuration(service.downtime));
     text('connection', service.connected ? 'Connected' : 'Isolated');
     text('connection-action', service.connected ? 'Disconnect service' : 'Reconnect service');
     button('connection-action').disabled = readOnly;
     text('connection-hint', review ? 'Read-only replay. Return to live to issue commands.' : service.connected ? `Disconnect to release ${definition.load} CU. No other service reconnects automatically.` : `${definition.load} CU required · ${headroom} CU available. ${definition.load > headroom ? 'Repair a feeder or free capacity first.' : 'Reconnection is immediate, including while paused.'}`);
   } else if (isFeeder(selected)) {
-    const definition = FEEDERS[selected];
+    const definition = cfg.feeders[selected];
     text('node-status', feederNames[state.feeders[selected]]);
     element('node-status').dataset.tone = state.feeders[selected] === 'repaired' ? 'grid' : state.feeders[selected] === 'faulted' ? 'faulted' : 'backup';
     text('node-flavor', '');
@@ -605,18 +677,19 @@ function refresh(): void {
     text('repair-duration', formatDuration(definition.repairTicks));
     for (const [index, id] of CREW_IDS.entries()) {
       const feederTaken = state.feeders[selected] !== 'faulted';
-      button(`dispatch-${index + 1}`).disabled = readOnly || state.crews[id].phase !== 'idle' || feederTaken;
-      text(`dispatch-${index + 1}`, `Dispatch ${LABELS[id]}${state.crews[id].phase !== 'idle' ? ' · busy' : feederTaken ? ' · feeder has a crew' : ''}`);
+      const crew = state.crews[id];
+      button(`dispatch-${index + 1}`).disabled = readOnly || crew.phase !== 'idle' || feederTaken;
+      text(`dispatch-${index + 1}`, `Dispatch ${LABELS[id]}${crew.phase === 'away' ? ` · back ${wt(crew.returnAt, state)}` : crew.phase !== 'idle' ? ' · busy' : feederTaken ? ' · feeder has a crew' : ''}`);
     }
-    text('dispatch-hint', review ? 'Read-only replay. Return to live to dispatch.' : state.feeders[selected] === 'repaired' ? 'Capacity is available. Inspect a service to reconnect it.' : state.feeders[selected] === 'faulted' ? `Depot travel: ${formatDuration(SCENARIO.depotTravel)}. Travel from the other feeder: ${formatDuration(SCENARIO.crossTravel)}. Busy crews cannot be reassigned.` : 'This feeder already has a crew. Repair cannot be accelerated or cancelled.');
+    text('dispatch-hint', review ? 'Read-only replay. Return to live to dispatch.' : state.feeders[selected] === 'repaired' ? 'Capacity is available. Inspect a service to reconnect it.' : state.feeders[selected] === 'faulted' ? `Depot travel: ${formatDuration(depotTravel)}. Travel from the other feeder: ${formatDuration(crossTravel)}. Busy crews cannot be reassigned.` : 'This feeder already has a crew. Repair cannot be accelerated or cancelled.');
   } else {
-    text('node-status', selected === 'supply' ? 'Intact · 13 CU source' : 'Crew origin · no service load');
+    text('node-status', selected === 'supply' ? `Intact · ${upstreamCapacity} CU source` : 'Crew origin · no service load');
     element('node-status').dataset.tone = 'grid';
     text('node-flavor', '');
-    text('node-description', selected === 'supply' ? 'Supply is intact. The two parallel feeders are the fault: repair either one to make some capacity available to every service.' : 'Two identical crews start here. Each can repair one feeder at a time. All authored routes remain traversable.');
+    text('node-description', selected === 'supply' ? 'Supply is intact. The two parallel feeders are the fault: repair either one to make some capacity available to every service.' : 'Crews operate from the depot. Each can repair one feeder at a time. All authored routes remain traversable.');
   }
-  text('a-state', `${feederNames[state.feeders['feeder-a']]} · 6 CU`);
-  text('b-state', `${feederNames[state.feeders['feeder-b']]} · 7 CU`);
+  text('a-state', `${feederNames[state.feeders['feeder-a']]} · ${cfg.feeders['feeder-a'].capacity} CU`);
+  text('b-state', `${feederNames[state.feeders['feeder-b']]} · ${cfg.feeders['feeder-b'].capacity} CU`);
   text('crew-availability', `${CREW_IDS.filter(id => state.crews[id].phase === 'idle').length} available`);
   for (const id of SERVICE_IDS) {
     const item = serviceElements.get(id)!;
@@ -630,15 +703,15 @@ function refresh(): void {
   for (const id of CREW_IDS) {
     const crew = state.crews[id];
     const item = crewElements.get(id)!;
-    item.status.textContent = crew.phase === 'idle' ? 'Available' : crew.phase === 'traveling' ? 'Traveling' : 'Repairing';
-    item.estimate.textContent = crew.phase === 'idle' ? `At ${LABELS[crew.location]}` : `${LABELS[crew.target!]} · ${crew.phase === 'traveling' ? 'arrival' : 'repair'} in ${formatDuration((crew.phase === 'traveling' ? crew.arriveAt : crew.completeAt) - state.tick)}`;
-    item.progress.hidden = crew.phase === 'idle';
-    item.progress.value = crew.phase === 'idle' ? 0 : (state.tick - crew.departedAt) / (crew.completeAt - crew.departedAt);
+    item.status.textContent = crew.phase === 'idle' ? 'Available' : crew.phase === 'away' ? 'On another job' : crew.phase === 'traveling' ? 'Traveling' : 'Repairing';
+    item.estimate.textContent = crew.phase === 'away' ? `Back at ${wt(crew.returnAt, state)}` : crew.phase === 'idle' ? `At ${LABELS[crew.location]}` : `${LABELS[crew.target!]} · ${crew.phase === 'traveling' ? 'arrival' : 'repair'} in ${formatDuration((crew.phase === 'traveling' ? crew.arriveAt : crew.completeAt) - state.tick)}`;
+    item.progress.hidden = crew.phase === 'idle' || crew.phase === 'away';
+    item.progress.value = crew.phase === 'idle' || crew.phase === 'away' ? 0 : (state.tick - crew.departedAt) / (crew.completeAt - crew.departedAt);
   }
   text('play', currentClock.running ? 'Pause time' : state.tick === 0 ? 'Start time' : 'Resume time');
   button('play').disabled = review !== null && state.tick === live.tick;
   button('step').disabled = currentClock.running || catchingUp || (review !== null && review.tick === live.tick);
-  button('next-event').disabled = currentClock.running || catchingUp || review !== null || nextTransition(state) === null;
+  button('next-event').disabled = currentClock.running || catchingUp || review !== null || (nextTransition(state) === null && backupWarnTick(state) === null);
   button('replay').hidden = review !== null;
   button('replay').disabled = live.tick === 0 && live.commands.length === 0;
   button('return-live').hidden = review === null;
@@ -646,10 +719,10 @@ function refresh(): void {
   cursor.disabled = review === null;
   cursor.max = String(live.tick);
   cursor.value = String(state.tick);
-  cursor.setAttribute('aria-valuetext', `${formatWorldTime(state.tick)} of ${formatWorldTime(live.tick)}`);
+  cursor.setAttribute('aria-valuetext', `${wt(state.tick, state)} of ${wt(live.tick, live)}`);
   text('cursor-label', review ? 'REPLAY CURSOR' : 'LIVE RUN');
-  text('cursor-time', `${formatWorldTime(state.tick)} / ${formatWorldTime(live.tick)}`);
-  text('history-context', `${state.events.length > 30 ? 'Latest 30 actual' : 'Actual'} events through ${formatWorldTime(state.tick)}${review ? ' · replay' : ''}`);
+  text('cursor-time', `${wt(state.tick, state)} / ${wt(live.tick, live)}`);
+  text('history-context', `${state.events.length > 30 ? 'Latest 30 actual' : 'Actual'} events through ${wt(state.tick, state)}${review ? ' · replay' : ''}`);
   const key = `${review !== null}/${state.events.length}/${state.events.at(-1)?.text}`;
   if (key !== historyKey) {
     historyKey = key;
@@ -658,7 +731,7 @@ function refresh(): void {
       const item = document.createElement('li');
       item.dataset.tick = String(event.tick);
       const time = document.createElement('time');
-      time.textContent = formatWorldTime(event.tick);
+      time.textContent = wt(event.tick, state);
       const content = document.createElement('span');
       content.textContent = event.text;
       item.append(time, content);
@@ -666,7 +739,7 @@ function refresh(): void {
     }));
     list.scrollTop = list.scrollHeight;
   }
-  text('task-banner', review ? `Read-only replay at ${formatWorldTime(state.tick)}. Your live run is preserved.` : taskText(state));
+  text('task-banner', review ? `Read-only replay at ${wt(state.tick, state)}. Your live run is preserved.` : taskText(state));
   const decisionOpen = Boolean(decisionMessage) && !currentClock.running && !review;
   element('decision').hidden = !decisionOpen;
   element('task-banner').hidden = decisionOpen;
@@ -677,7 +750,7 @@ function refresh(): void {
   if (phase(state) !== 'restored') summaryDismissed = false;
   const showSummary = phase(state) === 'restored' && !currentClock.running && !review && !summaryDismissed;
   if (showSummary) {
-    const summaryStateKey = `${completedRuns.length}/${live.commands.length}/${live.tick}`;
+    const summaryStateKey = `${completedRuns[live.scenario].length}/${live.commands.length}/${live.tick}`;
     if (summaryStateKey !== summaryKey) {
       summaryKey = summaryStateKey;
       renderSummary();
@@ -710,8 +783,9 @@ function togglePlay(): void {
 button('play').addEventListener('click', togglePlay);
 button('step').addEventListener('click', () => {
   if (clock().running || clock().pendingTicks) return;
-  if (review) review = replay(live.commands, Math.min(live.tick, review.tick + 1));
+  if (review) review = replay(live.commands, Math.min(live.tick, review.tick + 1), live.scenario);
   else {
+    decisionMessage = '';
     const before = live;
     live = advance(live, live.tick + 1);
     decisionCheck(before, live);
@@ -720,12 +794,15 @@ button('step').addEventListener('click', () => {
 });
 button('next-event').addEventListener('click', () => {
   if (review || liveClock.running || liveClock.pendingTicks) return;
-  const tick = nextTransition(live);
-  if (tick === null) return;
+  const transition = nextTransition(live);
+  const warn = backupWarnTick(live);
+  const tick = Math.min(transition ?? Number.POSITIVE_INFINITY, warn ?? Number.POSITIVE_INFINITY);
+  if (!Number.isFinite(tick)) return;
+  decisionMessage = '';
   const before = live;
   live = advance(live, tick);
   decisionCheck(before, live);
-  feedback(`Advanced to ${formatWorldTime(tick)} and stayed paused. ${live.events.at(-1)!.text}`);
+  feedback(`Advanced to ${wt(tick, live)} and stayed paused. ${live.events.at(-1)!.text}`);
   refresh();
 });
 speed.addEventListener('change', () => { const value = Number(speed.value); sync(); clock().setSpeed(value); refresh(); });
@@ -733,7 +810,7 @@ function startReplay(): void {
   sync();
   liveClock.setRunning(false);
   reviewClock.reset();
-  review = replay(live.commands, 0);
+  review = replay(live.commands, 0, live.scenario);
   feedback('Read-only replay. Scrub or play the recording; return to live to continue your preserved run.');
   refresh();
   cursor.focus();
@@ -751,7 +828,7 @@ button('return-live').addEventListener('click', returnLive);
 cursor.addEventListener('input', () => {
   if (!review) return;
   reviewClock.reset();
-  review = replay(live.commands, Number(cursor.value));
+  review = replay(live.commands, Number(cursor.value), live.scenario);
   lastClockTime = performance.now();
   refresh();
 });
@@ -765,20 +842,29 @@ button('restart').addEventListener('click', () => {
   sync();
   clock().setRunning(false);
   refresh();
+  pendingStorm = null;
   if (phase(live) === 'restored') {
     archiveRun();
     resetRun();
-    feedback('New Storm 01 run. Both crews are ready at the depot. Time is paused.');
+    feedback(`New ${SCENARIOS[current].subtitle} run. Time is paused.`);
     return;
   }
+  text('restart-title', `Restart ${SCENARIOS[current].subtitle}?`);
   dialog.showModal();
 });
-button('cancel-restart').addEventListener('click', () => dialog.close());
+button('cancel-restart').addEventListener('click', () => { pendingStorm = null; dialog.close(); });
 button('confirm-restart').addEventListener('click', () => {
   archiveRun();
-  resetRun();
-  feedback('New Storm 01 run. Both crews are ready at the depot. Time is paused.');
   dialog.close();
+  if (pendingStorm) {
+    const target = pendingStorm;
+    pendingStorm = null;
+    // A storm switch lands on that incident's briefing step.
+    startStorm(target);
+    return;
+  }
+  resetRun();
+  feedback(`New ${SCENARIOS[current].subtitle} run. Time is paused.`);
 });
 button('resume').addEventListener('click', () => {
   if (phase(live) === 'restored' && !review) {
@@ -852,20 +938,107 @@ const syncSoundToggle = (): void => {
 };
 button('sound-toggle').addEventListener('click', () => { sound.setMuted(!sound.muted); syncSoundToggle(); });
 const briefing = element<HTMLDialogElement>('briefing');
-let briefingBegin = false;
-button('begin').addEventListener('click', () => { briefingBegin = true; briefing.close(); });
-button('skip-briefing').addEventListener('click', () => { briefingBegin = false; briefing.close(); });
+let briefingIntent: 'begin' | 'skip' | null = null;
+let pendingStorm: ScenarioId | null = null;
+let briefed = false;
+const runInProgress = (): boolean => live.tick > 0 || live.commands.length > 0;
+
+// Picker cards are generated from SCENARIOS so card copy stays in scenario.ts.
+for (const id of SCENARIO_IDS) {
+  const config = SCENARIOS[id];
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'incident-card';
+  card.dataset.storm = id;
+  const name = document.createElement('strong');
+  name.textContent = `${config.subtitle} · ${config.title}`;
+  const line = document.createElement('span');
+  line.textContent = config.pickerLine;
+  card.append(name, line);
+  card.addEventListener('click', () => chooseStorm(id));
+  element('incident-cards').append(card);
+}
+
+function showPickerStep(): void {
+  element('incident-picker').hidden = false;
+  element('incident-briefing').hidden = true;
+  briefing.setAttribute('aria-labelledby', 'briefing-title');
+  for (const card of element('incident-cards').querySelectorAll<HTMLElement>('.incident-card')) {
+    card.dataset.current = String(card.dataset.storm === current);
+  }
+}
+
+function showBriefingStep(id: ScenarioId): void {
+  const config = SCENARIOS[id];
+  text('storm-title', `${config.subtitle} — ${config.title}`);
+  element('briefing-beats').replaceChildren(...config.briefing.map(line => {
+    const item = document.createElement('li');
+    item.textContent = line;
+    return item;
+  }));
+  element('incident-picker').hidden = true;
+  element('incident-briefing').hidden = false;
+  briefing.setAttribute('aria-labelledby', 'storm-title');
+  button('begin').focus();
+}
+
+function openPicker(): void {
+  sync();
+  clock().setRunning(false);
+  refresh();
+  showPickerStep();
+  if (!briefing.open) briefing.showModal();
+}
+
+function startStorm(id: ScenarioId): void {
+  current = id;
+  resetRun();
+  showBriefingStep(id);
+  if (!briefing.open) briefing.showModal();
+}
+
+function chooseStorm(id: ScenarioId): void {
+  if (runInProgress()) {
+    pendingStorm = id;
+    briefing.close(); // no intent — the close handler leaves the run alone
+    text('restart-title', id === current ? `Restart ${SCENARIOS[id].subtitle}?` : `Switch to ${SCENARIOS[id].subtitle}?`);
+    dialog.showModal();
+    return;
+  }
+  startStorm(id);
+}
+
+button('incidents').addEventListener('click', openPicker);
+button('picker-back').addEventListener('click', showPickerStep);
+button('begin').addEventListener('click', () => { briefingIntent = 'begin'; briefing.close(); });
+button('skip-briefing').addEventListener('click', () => { briefingIntent = 'skip'; briefing.close(); });
+briefing.addEventListener('cancel', event => {
+  if (!element('incident-picker').hidden) {
+    // First visit: the picker must be answered — there is no run to fall back to.
+    if (!briefed && !runInProgress()) event.preventDefault();
+    return;
+  }
+  // Escape on the briefing step behaves like Skip: start without the cinematic.
+  briefingIntent = 'skip';
+});
 briefing.addEventListener('close', () => {
+  const intent = briefingIntent;
+  briefingIntent = null;
+  if (intent === null) return; // programmatic close (confirm flow or picker dismiss)
+  briefed = true;
   sound.start();
   syncSoundToggle();
-  if (briefingBegin) scene?.begin(); else scene?.skip();
+  if (intent === 'begin') scene?.begin(); else scene?.skip();
 });
 element('scene').addEventListener('pointerdown', event => {
   if (!popoverNode || !(event.target instanceof HTMLElement)) return;
   if (event.target.closest('#node-actions') || event.target.closest('.map-marker')) return;
   closePopover();
 });
-if (new URLSearchParams(location.search).get('skipBriefing') !== '1') briefing.showModal();
+if (new URLSearchParams(location.search).get('skipBriefing') !== '1') {
+  showPickerStep();
+  briefing.showModal();
+}
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     sync();

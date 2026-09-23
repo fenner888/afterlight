@@ -87,10 +87,19 @@ h1, h2, h3, p { margin: 0; }
 #summary thead th { color: var(--muted); font-weight: 400; }
 #summary ol { margin: 0; padding-left: 20px; font-size: 11px; color: #c9d5d7; }
 #summary ol li { margin: 3px 0; }
+#summary .order-columns { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+#summary .order-run { display: block; font: 10px var(--mono); letter-spacing: .12em; color: var(--muted); margin-bottom: 4px; }
+#summary .order-col ol { padding-left: 18px; font-family: var(--mono); }
+#summary .order-empty { font: 11px var(--mono); color: var(--muted); }
 #summary .summary-actions { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
 #summary .summary-actions button { min-height: 36px; font-size: 12px; }
 .briefing-beats { margin: 0; padding-left: 22px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .briefing-beats li { margin: 7px 0; }
+.incident-cards { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.incident-card { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 13px 15px; min-height: 0; }
+.incident-card strong { font-size: 13px; font-weight: 500; letter-spacing: .02em; }
+.incident-card span { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.incident-card[data-current='true'] { border-color: var(--amber); }
 .scene-canvas { position: absolute; inset: 0; }
 .scene-canvas canvas { width: 100%; height: 100%; display: block; touch-action: pan-y; }
 .scene-markers { position: absolute; inset: 0; pointer-events: none; }
@@ -185,6 +194,7 @@ dialog p { font-size: 13px; color: var(--muted); }
 .skip-link { position: absolute; z-index: 100; top: -60px; left: 20px; color: var(--text); background: var(--panel); padding: 10px; }
 .skip-link:focus { top: 10px; }
 @media (max-width: 1100px) { .capacity-overlay strong { font-size: 18px; } .replay-scrub { width: auto; flex: 1; } .replay-scrub label { display: none; } .replay-scrub { grid-template-columns: minmax(60px, 1fr) auto; } .transport { flex-wrap: wrap; height: auto; min-height: 56px; padding: 6px 26px; } .scene { min-height: 0; } .service-cell { padding: 4px 7px; } .service-cell strong { font-size: 10px; } }
+@media (max-width: 500px) { #summary .order-columns { flex-direction: column; } }
 @media (max-width: 800px) {
   .masthead { order: 0; height: 56px; padding: 0 16px; gap: 12px; } .brand { gap: 10px; } .brand h1 { font-size: 15px; letter-spacing: .18em; } .brand-mark { width: 14px; height: 20px; } .brand-mark::after { width: 22px; top: 8px; } .incident-label { display: none; } .header-status { gap: 10px; } .header-status time { font-size: 16px; } .masthead .quiet-button { min-height: 40px; padding: 6px 8px; }
   .workspace { display: contents; } .district { order: 1; } .timeline { order: 2; } .inspector { order: 3; } .footer { order: 4; }
@@ -197,7 +207,7 @@ dialog p { font-size: 13px; color: var(--muted); }
   .transport { padding: 8px 18px; height: auto; min-height: 56px; gap: 10px; } .playback-buttons { width: 100%; } .playback-buttons button { flex: 1; min-height: 44px; } .speed-control { padding-left: 0; } .replay-scrub { flex-basis: 100%; } .footer { padding: 14px 18px; flex-wrap: wrap; gap: 10px; }
 }
 @media (max-width: 450px) {
-  .masthead { gap: 6px; padding: 0 8px; } .brand { gap: 7px; } .brand h1 { font-size: 12px; letter-spacing: .12em; } .header-status { gap: 6px; } .status-tag { font-size: 8px; } .header-status time { font-size: 12px; } .masthead .quiet-button { font-size: 10px; min-height: 34px; padding: 3px 6px; }
+  .masthead { gap: 6px; padding: 0 8px; } .brand { gap: 7px; } .brand h1 { display: none; } .header-status { gap: 6px; } .status-tag { font-size: 8px; } .header-status time { font-size: 12px; } .masthead .quiet-button { font-size: 10px; min-height: 34px; padding: 3px 6px; }
   .capacity-overlay { padding: 3px 6px; } .capacity-overlay strong { font-size: 14px; } #headroom { font-size: 8px; display: block; } .scene-note { bottom: 60px; } .camera-tools { left: 12px; right: auto; bottom: 12px; flex-wrap: wrap; max-width: calc(100% - 24px); } .camera-tools button { min-width: 30px; min-height: 30px; padding: 3px 7px; font-size: 11px; } .service-cell { padding: 4px 5px; } .service-cell .service-time { font-size: 8px; } .service-cell .service-state { font-size: 9px; } .dialog-actions { flex-direction: column; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

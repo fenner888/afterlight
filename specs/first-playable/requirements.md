@@ -157,6 +157,18 @@ Before this change: azimuth was limited to ±35° around the default, polar angl
 - **No fighting the player**: any user camera input cancels in-flight camera animations. Idle drift runs only after 20 s without camera input, never while a popover is open, and never under reduced motion. Selecting a node no longer moves the camera. The restoration pull-back is skipped if the player moved the camera in the previous 10 s.
 - Markers, the popover, ring labels and raycast picking follow the camera from every allowed angle.
 
+### Storms 02/03, incident picker and run comparison (approved September 23)
+
+Numbers and copy: [incidents.md](incidents.md).
+
+- **Scenario configs.** `src/scenario.ts` exports `SCENARIOS: Record<ScenarioId, ScenarioConfig>` with id, version, seed, title, subtitle, pickerLine, briefing[], incidentText, worldStart (minutes), per-service backup, per-feeder capacity/repairTicks, and per-crew `returnAt` (0 = at the depot). Labels, loads, flavor, travel times and positions stay shared. `validateScenario(config)` checks every config at load.
+- **Domain.** `initialState(id = 'storm-01')`. `State.scenario` selects the config. Every domain function reads the config from the state, never from a module-level "current scenario". Adding the away-crew phase is the only mechanic change. `replay(commands, cursor, id)`. Storm 01's reference runs and outcomes are unchanged.
+- **World clock.** World time, day phase and sunrise tick take the scenario's worldStart. The presentation passes the active config; no hidden global. The 660 sunrise literal is replaced by `sunriseTick(config)`.
+- **Picker.** The briefing dialog opens on the picker: three cards (title, subtitle, pickerLine). Choosing one shows that storm's briefing, then Begin/Skip. A header "Incidents" button reopens the picker. Choosing a different storm, or re-choosing one mid-run, asks for the same confirmation as Restart. The header incident label shows "INCIDENT 0N" and the title. Restart restarts the current storm.
+- **Away crew in the scene.** While away, that truck isn't in the district. It drives in from the east end of the main road (westbound lane) over the 30 ticks before returnAt, down the access road, and reverses into its nose-out bay, arriving exactly at returnAt. Traffic yield rules apply. Cover it in the traffic tests (returning truck vs a departing Crew 1 at all dispatch ticks 0–119).
+- **Run comparison.** Completed runs are kept in memory per storm for the session (no persistence): the latest three. The summary shows them as columns (Run 1/2/3) with per-service downtime, fully-restored world time and reconnection order. No score, no winner highlight, no colour-only difference. "Try a different order" restarts the same storm. The summary also offers "Try another storm", which opens the picker.
+- **Audio.** Crew return plays the `decision` cue. No new cues.
+
 ### Art (buildings, trees, quay, boat, cars)
 
 - Buildings: parapet/cornice caps, stepped massing, framed windows (inset with sill and lintel, instanced), ground-floor entrances with doors and awnings/canopies, drainpipes, rooftop clutter (HVAC boxes, vents, water tank on housing, antenna). Clinic: entrance canopy with a lit cross sign and a visible generator unit with exhaust stack. Pumping station: pipework and a tank. Lighthouse: gallery railing and glazed lantern room. A distant fog-faded shoreline with a few lit windows across the water (decoration, not nodes), which also softens the horizon band.

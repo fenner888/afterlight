@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  depotBay, parkPose, routeFor, routeLength, poseAt,
-  footprintsOverlap, Traffic, FOOT_LENGTH, FOOT_WIDTH,
+  depotBay, parkPose, routeFor, routeLength, poseAt, returnRoute,
+  footprintsOverlap, Traffic, FOOT_LENGTH, FOOT_WIDTH, TRUCK_LENGTH, TRUCK_WIDTH,
+  RETURN_DRIVE,
 } from '../src/scene/traffic.ts';
 
 const TICK_RATE = 10;             // sim ticks per real second at Normal speed
@@ -26,11 +27,11 @@ const onRoad = (p) => ROADS.some((r) => p.x >= r.x0 - .01 && p.x <= r.x1 + .01 &
 // (length + .5, width + .2, matching the truck rule).
 const CARS = [
   { x: -10.7, z: 1.32, heading: 0, l: 1.52, w: .68 },
-  { x: 10.7, z: 2.28, heading: Math.PI, l: 1.7, w: .7 },
+  { x: -10.7, z: 2.28, heading: Math.PI, l: 1.7, w: .7 },
   { x: -8.48, z: -6.6, heading: Math.PI / 2, l: 1.52, w: .68 },
   { x: 8.48, z: -6.9, heading: -Math.PI / 2, l: 1.7, w: .7 },
   { x: -8.48, z: -4.8, heading: Math.PI / 2, l: 1.52, w: .68 },
-  { x: 1.8, z: 1.25, heading: 0, l: 1.7, w: .7 },
+  { x: 8.48, z: -4.8, heading: -Math.PI / 2, l: 1.7, w: .7 },
 ];
 
 const ROUTES = [
@@ -167,6 +168,70 @@ test('feeder-to-feeder run clears the truck parked at the depot', () => {
     assert.notEqual(crews[0].parkedAt, null, `crew never parked (${origin}->${target})`);
     assert.ok(maxLate <= 1, `late ${maxLate.toFixed(2)}s (${origin}->${target})`);
     assert.ok(Math.abs(crews[0].parkedAt - CROSS_TRIP / TICK_RATE) <= 1);
+  }
+});
+
+// Storm-02 return drive: Crew 2 comes back down the westbound lane and backs
+// into its bay, due exactly at returnAt = 120. Its route exists (and reserves
+// the single-lane depot yard) from returnAt - RETURN_DRIVE - 15, matching
+// vehicles.ts, while the truck stays invisible until returnAt - RETURN_DRIVE.
+// Crew 1 may be dispatched to either feeder at any tick 0–119. The pairwise
+// check uses real truck bodies, not the yield margins: the two main-road lanes
+// are .8 apart — narrower than FOOT_WIDTH — so a legal abreast pass keeps only
+// .02 body clearance, which the assertions below verify explicitly.
+test('return drive vs dispatch at every tick 0-119, both feeders', () => {
+  const RETURN_AT = 120;
+  const route = returnRoute(1);
+  const len = routeLength(route);
+  const nominal = len * TICK_RATE / RETURN_DRIVE;
+  for (const target of ['feeder-a', 'feeder-b']) {
+    for (let gap = 0; gap < RETURN_AT; gap++) {
+      const traffic = new Traffic();
+      const route1 = routeFor(0, 'depot', target);
+      const len1 = routeLength(route1);
+      const end = Math.max(gap + DEPOT_TRIP, RETURN_AT) + 30;
+      let parked2 = null;
+      let worstLate2 = -Infinity;
+      for (let t = 0; t < end / TICK_RATE + 2; t += DT) {
+        const simNow = t * TICK_RATE;
+        const inputs = [
+          simNow >= gap
+            ? {
+              route: route1,
+              scheduleDistance: Math.min(1, (simNow - gap) / DEPOT_TRIP) * len1,
+              nominalSpeed: len1 * TICK_RATE / DEPOT_TRIP,
+              priority: gap * 2,
+              snap: false, parked: null,
+            }
+            : { route: null, scheduleDistance: 0, nominalSpeed: 0, priority: 200, snap: false, parked: depotBay(0) },
+          simNow >= RETURN_AT - RETURN_DRIVE - 15
+            ? {
+              route,
+              scheduleDistance: Math.min(1, Math.max(0, (simNow - (RETURN_AT - RETURN_DRIVE)) / RETURN_DRIVE)) * len,
+              nominalSpeed: nominal,
+              priority: (RETURN_AT - RETURN_DRIVE) * 2 + 1,
+              snap: false, parked: null, returning: true,
+            }
+            : { route: null, scheduleDistance: 0, nominalSpeed: 0, priority: 201, snap: false, parked: depotBay(1) },
+        ];
+        const step = traffic.step(inputs, DT);
+        const tag = `target=${target} gap=${gap} t=${t.toFixed(2)}`;
+        assert.ok(!footprintsOverlap(step[0], step[1], TRUCK_LENGTH, TRUCK_WIDTH),
+          `truck bodies overlap (${tag})`);
+        for (const [ci, pose] of step.entries())
+          for (const [c, car] of CARS.entries())
+            assert.ok(!footprintsOverlap(pose, { x: car.x, z: car.z, heading: car.heading }, TRUCK_LENGTH, TRUCK_WIDTH, car.l, car.w),
+              `truck ${ci} hits parked car ${c} (${tag})`);
+        if (parked2 === null && traffic.parked(1) && simNow > 0) {
+          parked2 = simNow;
+          worstLate2 = parked2 - RETURN_AT;
+        }
+      }
+      assert.notEqual(parked2, null, `Crew 2 never parked (target=${target} gap=${gap})`);
+      assert.ok(worstLate2 <= 10, `Crew 2 parked ${worstLate2.toFixed(1)} ticks after returnAt (target=${target} gap=${gap})`);
+      const home = depotBay(1), endPose = poseAt(route, len);
+      assert.ok(Math.hypot(endPose.x - home.x, endPose.z - home.z) < .01);
+    }
   }
 });
 

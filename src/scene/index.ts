@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { NODE_IDS, CREW_IDS, FEEDER_IDS, SERVICE_IDS, SERVICES, LABELS, isService, isFeeder, formatDuration, dayPhase } from '../scenario.ts';
+import { NODE_IDS, CREW_IDS, FEEDER_IDS, SERVICE_IDS, SERVICES, LABELS, SCENARIOS, isService, isFeeder, formatDuration, dayPhase } from '../scenario.ts';
 import type { NodeId, CrewId, FeederId, ServiceId } from '../scenario.ts';
 import { capacity, connectedLoad, phase, serviceStatus } from '../domain.ts';
 import type { State } from '../domain.ts';
@@ -13,6 +13,7 @@ import { Sea } from './water.ts';
 import { SceneLights } from './lights.ts';
 import { PostFX } from './post.ts';
 import { Cinematic } from './cinematic.ts';
+import { RETURN_DRIVE } from './traffic.ts';
 import { Fleet } from './vehicles.ts';
 import { rainStreak } from './textures.ts';
 
@@ -391,9 +392,14 @@ export class DistrictScene {
     const statusOf = (id: ServiceId): ServiceLight => this.resolvedStatus(state, id);
     for (const id of SERVICE_IDS) this.district.windows.note(id, statusOf(id), now);
     this.district.windows.update(statusOf, now, reduced);
-    const crewActive = new Map<CrewId, boolean>(CREW_IDS.map(id => [id, state.crews[id].phase === 'traveling']));
+    // Count the away crew's return drive as active so its headlights come on.
+    const crewActive = new Map<CrewId, boolean>(CREW_IDS.map(id => {
+      const crew = state.crews[id];
+      return [id, crew.phase === 'traveling' || (crew.phase === 'away' && state.tick >= crew.returnAt - RETURN_DRIVE)];
+    }));
     this.lights.update(statusOf, crewActive, this.sky.nightness);
-    this.sky.update(state.tick, connectedLoad(state), current, dayPhase(state.tick), now, dt);
+    const worldStart = SCENARIOS[state.scenario].worldStart;
+    this.sky.update(state.tick, connectedLoad(state), current, dayPhase(state.tick, worldStart), now, dt, worldStart);
     this.sea.update(now, dt, this.sky.nightness);
     // Distant-shore windows glow only at night — sparse and dim, never by day.
     const shoreWindows = this.district.shoreWindows;

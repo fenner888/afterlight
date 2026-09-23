@@ -1,7 +1,14 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
+// The briefing dialog opens on the incident picker; picking a card shows that
+// storm's briefing before Begin.
+const pickStorm = async (page: Page, id: string) => {
+  await page.locator(`#incident-cards [data-storm="${id}"]`).click();
+  await expect(page.locator('#incident-briefing')).toBeVisible();
+};
 const begin = async (page: Page) => {
+  await pickStorm(page, 'storm-01');
   await page.locator('#begin').click();
   await expect(page.locator('#briefing')).toBeHidden();
 };
@@ -155,7 +162,8 @@ for (const priority of ['clinic', 'housing']) {
     for (const id of priority === 'clinic' ? ['clinic', 'pump'] : ['housing-a', 'housing-b']) await reconnect(page, id);
     await expect(page.locator('#load')).toHaveText('6');
     if (priority === 'housing') {
-      await next(page, '06:00');
+      // Next event stops at the 05:00 backup-warning boundary before the 06:00 expiry.
+      await advanceTo(page, 360);
       await expect(page.locator('[data-service="clinic"] .service-state')).toHaveText('Offline');
     }
     await advanceTo(page, 480 + delayB);
@@ -311,7 +319,7 @@ test('try a different order resets without a dialog and compares session runs', 
     await expect(page.locator('#summary')).toBeVisible();
   };
   await completeRun();
-  await expect(page.locator('#summary')).toContainText('This run');
+  await expect(page.locator('#summary')).toContainText('Run 1');
   await page.locator('#try-again').click();
   await expect(page.locator('#restart-dialog')).toBeHidden();
   await expect(page.locator('#time')).toHaveText('00:00');
@@ -319,7 +327,7 @@ test('try a different order resets without a dialog and compares session runs', 
   await expect(page.locator('#events li')).toHaveCount(1);
   await completeRun();
   await expect(page.locator('#summary')).toContainText('Run 1');
-  await expect(page.locator('#summary')).toContainText('This run');
+  await expect(page.locator('#summary')).toContainText('Run 2');
   await expect(page.locator('#summary th[scope="col"]')).toHaveCount(3);
 });
 
@@ -588,6 +596,7 @@ test('mobile clarity: world time stays visible with no horizontal overflow', asy
 test('briefing states the stakes and the generator deadline', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#briefing')).toBeVisible();
+  await pickStorm(page, 'storm-01');
   await expect(page.locator('#briefing')).toContainText('until about 01:30');
   await expect(page.locator('#briefing')).toContainText('Storm 01 — After the storm');
 });
@@ -737,4 +746,135 @@ test('camera commands apply instantly under reduced motion', async ({ page }) =>
   await page.locator('#rotate-left').click();
   await page.waitForTimeout(80);
   expect(Math.abs((await cameraState(page)).theta - before)).toBeCloseTo(Math.PI / 6, 2);
+});
+
+// Storms 02/03 — incident picker, dynamic header, away crew, comparison.
+test('incident picker offers three storms with per-storm briefings', async ({ page }) => {
+  await page.goto('/');
+  const cards = page.locator('#incident-cards .incident-card');
+  await expect(cards).toHaveCount(3);
+  await expect(cards.nth(0)).toContainText('Storm 01 · After the storm');
+  await expect(cards.nth(1)).toContainText('Storm 02 · Crew Short');
+  await expect(cards.nth(2)).toContainText('Storm 03 · The Long Dark');
+  await pickStorm(page, 'storm-02');
+  await expect(page.locator('#briefing')).toContainText('Storm 02 — Crew Short');
+  await expect(page.locator('#briefing')).toContainText('16:30');
+  await expect(page.locator('#briefing')).toContainText('18:30');
+  await page.locator('#picker-back').click();
+  await expect(page.locator('#incident-picker')).toBeVisible();
+  await pickStorm(page, 'storm-02');
+  await page.locator('#begin').click();
+  await expect(page.locator('#incident-number')).toHaveText('INCIDENT 02');
+  await expect(page.locator('#incident-title')).toHaveText('Crew Short');
+  await expect(page.locator('#world-time')).toHaveText('DAY · 16:30');
+  await expect(page.locator('#backup')).toHaveText('6h 00m');
+});
+
+test('storm-02: banner while Crew 2 is away, auto-pause with focused send on return', async ({ page }) => {
+  await page.goto('/');
+  await pickStorm(page, 'storm-02');
+  await page.locator('#skip-briefing').click();
+  await expect(page.locator('#task-banner')).toContainText('Crew 2 is back at 18:30');
+  // The away crew cannot be dispatched — the inspector shows its return clock.
+  await inspect(page, 'feeder-a');
+  await expect(page.locator('#dispatch-2')).toBeDisabled();
+  await expect(page.locator('#dispatch-2')).toContainText('back 18:30');
+  await page.locator('#dispatch-1').click();
+  await expect(page.locator('#mode')).toHaveText('RUNNING');
+  await expect(page.locator('#task-banner')).toContainText('Crew 2 is back at 18:30');
+  await ensurePaused(page);
+  await next(page, '01:00'); // Crew 1 arrives at Feeder A
+  await page.locator('#next-event').click();
+  await expect(page.locator('#time')).toHaveText('02:00');
+  await expect(page.locator('#world-time')).toHaveText('DAY · 18:30');
+  await expect(page.locator('#mode')).toHaveText('PAUSED');
+  await expect(page.locator('#decision')).toContainText('Crew 2 is back at the depot');
+  await expect(page.locator('#decision')).toContainText('Send it to Feeder B');
+  await expect(page.locator('#node-actions')).toBeVisible();
+  await expect(page.locator('#popover-title')).toHaveText('Feeder B');
+  await expect(page.locator('#node-actions [data-crew="crew-2"]')).toBeFocused();
+});
+
+test('storm-03: the 03:00 swap keeps the clinic at zero downtime', async ({ page }) => {
+  test.setTimeout(90000);
+  await page.goto('/');
+  await pickStorm(page, 'storm-03');
+  await page.locator('#begin').click();
+  await expect(page.locator('#incident-number')).toHaveText('INCIDENT 03');
+  await expect(page.locator('#incident-title')).toHaveText('The Long Dark');
+  await expect(page.locator('#world-time')).toHaveText('NIGHT · 23:00');
+  await expect(page.locator('#backup')).toHaveText('5h 00m');
+  await dispatchBothInspector(page);
+  await advanceTo(page, 180); // Feeder A repaired — world 02:00
+  await expect(page.locator('#decision')).toContainText('Feeder A is back — 4 units online');
+  await reconnect(page, 'housing-a');
+  await reconnect(page, 'beacon');
+  // Reconnecting the clinic over a full Feeder A is refused.
+  await inspect(page, 'clinic');
+  await page.locator('#connection-action').click();
+  await expect(page.locator('#feedback')).toContainText('0 CU headroom');
+  await page.locator('#next-event').click(); // the 1h-fuel warning stops Next event too
+  await expect(page.locator('#time')).toHaveText('04:00');
+  await expect(page.locator('#world-time')).toHaveText('NIGHT · 03:00');
+  await expect(page.locator('#decision')).toContainText('fuel left');
+  await inspect(page, 'housing-a');
+  await page.locator('#connection-action').click(); // disconnect
+  await inspect(page, 'beacon');
+  await page.locator('#connection-action').click(); // disconnect
+  await reconnect(page, 'clinic');
+  await page.locator('#next-event').click(); // clinic expiry no longer due -> Feeder B at 06:00
+  await expect(page.locator('#time')).toHaveText('07:00');
+  await expect(page.locator('#decision')).toContainText('13 units online');
+  for (const id of ['housing-a', 'housing-b', 'pump', 'beacon']) await reconnect(page, id);
+  await expect(page.locator('#decision')).toContainText('All services restored');
+  await page.locator('#resume').click();
+  await expect(page.locator('#summary')).toBeVisible();
+  await expect(summaryDowntime(page, 'clinic')).toHaveText('0h 00m');
+});
+
+test('try another storm opens the picker from the summary', async ({ page }) => {
+  test.setTimeout(90000);
+  await page.locator('#speed').selectOption('1');
+  await sendCrew(page, 'feeder-a', 'crew-1');
+  await ensurePaused(page);
+  await sendCrew(page, 'feeder-b', 'crew-2');
+  const delayB = await crew2DispatchTick(page);
+  await page.locator('#speed').selectOption('30');
+  await ensureRunning(page);
+  await expect(page.locator('#time')).toHaveText('04:00', { timeout: 20000 });
+  await reconnectPopover(page, 'clinic');
+  await reconnectPopover(page, 'pump');
+  await page.locator('#resume').click();
+  await expect(page.locator('#time')).toHaveText(simText(480 + delayB), { timeout: 20000 });
+  for (const id of ['housing-a', 'housing-b', 'beacon']) await reconnectPopover(page, id);
+  await expect(page.locator('#summary')).toBeVisible();
+  await page.locator('#try-another').click();
+  await expect(page.locator('#briefing')).toBeVisible();
+  await expect(page.locator('#incident-picker')).toBeVisible();
+  await expect(page.locator('#incident-cards .incident-card')).toHaveCount(3);
+});
+
+test('switching storms mid-run confirms; cancel preserves the run', async ({ page }) => {
+  await sendCrew(page, 'feeder-a', 'crew-1');
+  await ensurePaused(page);
+  await page.locator('#incidents').click();
+  await expect(page.locator('#incident-picker')).toBeVisible();
+  await page.locator('#incident-cards [data-storm="storm-02"]').click();
+  await expect(page.locator('#restart-dialog')).toBeVisible();
+  await expect(page.locator('#restart-title')).toHaveText('Switch to Storm 02?');
+  await page.locator('#cancel-restart').click();
+  await expect(page.locator('#restart-dialog')).toBeHidden();
+  await expect(page.locator('#incident-number')).toHaveText('INCIDENT 01');
+  await expect(page.locator('#events li')).toHaveCount(2);
+  await expect(page.locator('#node-actions')).toBeVisible(); // the run's popover survives
+  // Confirming lands on the new storm's briefing step.
+  await page.locator('#incidents').click();
+  await page.locator('#incident-cards [data-storm="storm-02"]').click();
+  await page.locator('#confirm-restart').click();
+  await expect(page.locator('#incident-briefing')).toBeVisible();
+  await expect(page.locator('#briefing')).toContainText('Storm 02 — Crew Short');
+  await page.locator('#begin').click();
+  await expect(page.locator('#incident-number')).toHaveText('INCIDENT 02');
+  await expect(page.locator('#world-time')).toHaveText('DAY · 16:30');
+  await expect(page.locator('#events li')).toHaveCount(1);
 });

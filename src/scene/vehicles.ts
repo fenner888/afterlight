@@ -7,7 +7,7 @@ import { POSITIONS } from './common.ts';
 import type { SceneContext } from './common.ts';
 import { paintedMetal, corrugated, chevrons, poolGradient, softCone } from './textures.ts';
 import type { SceneLights } from './lights.ts';
-import { depotBay, parkPose, routeFor, routeLength, Traffic } from './traffic.ts';
+import { depotBay, parkPose, returnRoute, routeFor, routeLength, Traffic, RETURN_DRIVE } from './traffic.ts';
 import type { Point, TruckInput } from './traffic.ts';
 
 // Utility bucket trucks replacing the old box vans. Truck local space: +x is the
@@ -72,6 +72,10 @@ interface Truck {
   routeKey: string;
   route: Point[] | null;
   routeLen: number;
+  returnRt: Point[] | null;
+  returnRtLen: number;
+  returnStart: number;
+  returning: boolean;
 }
 
 export class Fleet {
@@ -300,6 +304,7 @@ export class Fleet {
       workSpot, workPool, workCone, flash, site: null,
       boom: 0, distance: 0, prev: null, headingLag: 0, headingNow: null,
       routeKey: '', route: null, routeLen: 0,
+      returnRt: null, returnRtLen: 0, returnStart: 0, returning: false,
     };
   }
 
@@ -310,12 +315,13 @@ export class Fleet {
     const colors = [0x5a6a6e, 0x7a6f66, 0x40484e, 0x6b7a85, 0x8a8078, 0x4f5a5f];
     const dark = 0x1c2226, glass = 0x1a2430;
     // [x, z, heading, sedan] — kerb spots kept clear of every traffic route's
-    // footprint (the link road is too narrow for kerb parking + passing trucks,
-    // so those two sit on the west road and the main road's east stretch).
+    // footprint. The crew-return drive uses the whole westbound lane from the
+    // east end, so main-road parking only survives west of x -8 where no route
+    // reaches; the other two sit on the side roads' kerb edges.
     const spots: [number, number, number, boolean][] = [
-      [-10.7, 1.32, 0, false], [10.7, 2.28, Math.PI, true],
+      [-10.7, 1.32, 0, false], [-10.7, 2.28, Math.PI, true],
       [-8.48, -6.6, Math.PI / 2, false], [8.48, -6.9, -Math.PI / 2, true],
-      [-8.48, -4.8, Math.PI / 2, false], [1.8, 1.25, 0, true],
+      [-8.48, -4.8, Math.PI / 2, false], [8.48, -4.8, -Math.PI / 2, true],
     ];
     spots.forEach(([x, z, heading, sedan], i) => {
       const local: THREE.BufferGeometry[] = [];
@@ -470,6 +476,7 @@ export class Fleet {
       const crew = state.crews[id];
       const truck = this.trucks.get(id)!;
       if (crew.phase !== 'idle' && crew.target !== null) {
+        truck.returning = false;
         // En route or doing the post-arrival catch-up drive: keep the route
         // until the truck is visually parked at the feeder.
         const key = `${crew.origin}>${crew.target}@${crew.departedAt}`;
@@ -489,6 +496,42 @@ export class Fleet {
           priority: crew.departedAt * 2 + index, // earlier departure wins; tie -> crew-1
           snap,
           parked: null,
+        };
+      }
+      if (crew.phase === 'away' || truck.returning) {
+        // Away on an outside job: not in the district until RETURN_DRIVE ticks
+        // before returnAt, then drives in from the east end of the main road,
+        // down the access road and along the apron, and backs into its bay —
+        // reaching it exactly at returnAt (or finishing the catch-up drive if
+        // it had to yield). `returning` survives the phase flip to idle so the
+        // truck completes the back-in before the parked pose takes over.
+        const now = state.tick + (reduced ? 0 : fraction);
+        // The route is assigned a lead time before the truck becomes visible:
+        // while it exists Traffic reserves the depot zone, so a late dispatch
+        // waits at its bay instead of meeting the inbound truck head-on in the
+        // single-lane access road.
+        if (crew.phase === 'away' && now < crew.returnAt - RETURN_DRIVE - 15) {
+          truck.root.visible = false;
+          truck.returning = false;
+          truck.returnRt = null;
+          return { route: null, scheduleDistance: 0, nominalSpeed: 0, priority: index, snap, parked: depotBay(index as 0 | 1) };
+        }
+        if (crew.phase === 'away') truck.returnStart = crew.returnAt - RETURN_DRIVE;
+        truck.root.visible = state.tick + (reduced ? 0 : fraction) >= crew.returnAt - RETURN_DRIVE;
+        truck.returning = true;
+        if (!truck.returnRt) {
+          truck.returnRt = returnRoute(index as 0 | 1);
+          truck.returnRtLen = routeLength(truck.returnRt);
+        }
+        const progress = crew.phase === 'away' ? Math.min(1, Math.max(0, (now - truck.returnStart) / RETURN_DRIVE)) : 1;
+        return {
+          route: truck.returnRt,
+          scheduleDistance: progress * truck.returnRtLen,
+          nominalSpeed: truck.returnRtLen * tickRate / RETURN_DRIVE,
+          priority: truck.returnStart * 2 + index, // counts as having left at returnStart
+          snap,
+          parked: null,
+          returning: true,
         };
       }
       truck.routeKey = '';
@@ -513,6 +556,7 @@ export class Fleet {
       const pose = poses[index]!;
       const moving = this.traffic.moving(index);
       const parked = this.traffic.parked(index);
+      if (truck.returning && parked) truck.returning = false;
       truck.root.position.set(pose.x, .48, pose.z);
       const heading = pose.heading;
       // Display heading eases toward the route heading so pull-outs and corner

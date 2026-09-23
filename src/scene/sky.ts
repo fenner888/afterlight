@@ -8,10 +8,11 @@ const EXPOSURE: Record<string, number> = { dusk: 1.2, night: 2.7, dawn: 1.2, day
 const DUSK_MINUTES = 19 * 60 + 30;
 
 // Anchors (elapsed world minutes from 19:30, solar elevation deg):
-// +3 at dusk, -40 near 01:00, dawn -6 -> +6 across 05:00-06:30, +10 day.
-const ELEVATION: [number, number][] = [[0, 3], [330, -40], [570, -6], [660, 6], [900, 10]];
+// +3 at dusk, -40 near 01:00, dawn -6 -> +6 across 05:00-06:30, then up to a
+// midday +35 and back down through the afternoon to +3 at the next dusk.
+// Storms starting in daylight land on the second half of the arc.
+const ELEVATION: [number, number][] = [[0, 3], [330, -40], [570, -6], [660, 6], [780, 18], [1080, 35], [1300, 20], [1440, 3]];
 const solarElevation = (elapsed: number): number => {
-  if (elapsed >= 900) return 10;
   for (let i = 1; i < ELEVATION.length; i++) {
     const [t1, e1] = ELEVATION[i]!;
     if (elapsed <= t1) {
@@ -20,7 +21,7 @@ const solarElevation = (elapsed: number): number => {
       return e0 + (e1 - e0) * (.5 - .5 * Math.cos(Math.PI * t));
     }
   }
-  return 10;
+  return ELEVATION.at(-1)![1];
 };
 
 // Per-phase Sky shader parameters: dusk storm -> clear day.
@@ -144,13 +145,15 @@ export class SkyRig {
     this.onFlash?.();
   }
 
-  update(tick: number, load: number, simPhase: string, day: string, now: number, dt: number): void {
+  update(tick: number, load: number, simPhase: string, day: string, now: number, dt: number, worldStart: number): void {
     const { world, renderer } = this.ctx;
     const reducedMotion = this.ctx.reduced.matches;
-    const minutes = worldMinutes(tick);
+    const minutes = worldMinutes(tick, worldStart);
     const elapsed = ((minutes - DUSK_MINUTES) % 1440 + 1440) % 1440;
     const elevation = solarElevation(elapsed);
-    const azimuth = THREE.MathUtils.degToRad(280 + Math.min(elapsed, 660) / 660 * 160);
+    // The sun sweeps west->east under the horizon overnight (280 -> 80) then
+    // continues through the day to the next sunset (80 -> 280 over 13h).
+    const azimuth = THREE.MathUtils.degToRad(elapsed <= 660 ? 280 + elapsed / 660 * 160 : 440 + (elapsed - 660) / 780 * 200);
     const polar = THREE.MathUtils.degToRad(90 - elevation);
     this.sunDir.setFromSphericalCoords(1, polar, azimuth);
     const k = load / 13;
