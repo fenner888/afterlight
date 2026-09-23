@@ -1,0 +1,516 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { CREW_IDS } from '../scenario.ts';
+import type { CrewId, FeederId } from '../scenario.ts';
+import type { State } from '../domain.ts';
+import { POSITIONS } from './common.ts';
+import type { SceneContext } from './common.ts';
+import { paintedMetal, corrugated, chevrons, poolGradient, softCone } from './textures.ts';
+import type { SceneLights } from './lights.ts';
+
+// Utility bucket trucks replacing the old box vans. Truck local space: +x is the
+// nose, origin at ground level. Spec dims: length 1.9, width .78, cab .78 tall,
+// crew box 1.0 tall, wheel radius .17.
+const CREW_PAINT = [0xd9d2bd, 0x5f8284] as const; // crew-1 pale cream, crew-2 muted teal
+const STRIPE = 0xdfac60;
+const WHEEL_Y = .17;
+const WHEEL_SLOTS: [number, number][] = [[.62, -.33], [.62, .33], [-.28, -.33], [-.28, .33], [-.62, -.33], [-.62, .33]];
+const FOLDED_LOWER = .04; // nearly flat along the roof, pointing forward
+const RAISED_LOWER = THREE.MathUtils.degToRad(68);
+const FOLDED_ELBOW = Math.PI * .96; // upper arm folded back over the lower
+const RAISED_ELBOW = THREE.MathUtils.degToRad(-20);
+
+const smoothstep = (edge0: number, edge1: number, x: number): number => {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+};
+
+// Box geometry with a flat colour baked into a `color` attribute so a whole
+// truck body/dark set merges into one vertex-coloured mesh per material class.
+const part = (list: THREE.BufferGeometry[], color: number, w: number, h: number, d: number, x: number, y: number, z: number): void => {
+  const g = new THREE.BoxGeometry(w, h, d);
+  const c = new THREE.Color(color);
+  const count = g.getAttribute('position').count;
+  const colors = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) colors.set([c.r, c.g, c.b], i * 3);
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  g.translate(x, y, z);
+  list.push(g);
+};
+
+interface Truck {
+  root: THREE.Group;
+  body: THREE.Group;
+  headlightMounts: THREE.Object3D[];
+  tyres: THREE.InstancedMesh;
+  rims: THREE.InstancedMesh;
+  pivot: THREE.Group;
+  lower: THREE.Group;
+  elbow: THREE.Group;
+  bucket: THREE.Group;
+  outriggers: THREE.Mesh[];
+  head: THREE.MeshStandardMaterial;
+  tail: THREE.MeshStandardMaterial;
+  strobe: THREE.MeshStandardMaterial;
+  chevron: THREE.MeshStandardMaterial;
+  lamp: THREE.MeshStandardMaterial;
+  workSpot: THREE.SpotLight;
+  workPool: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  workCone: THREE.Mesh<THREE.ConeGeometry, THREE.MeshBasicMaterial>;
+  flash: THREE.Sprite;
+  site: FeederId | null;
+  boom: number;
+  distance: number;
+  prev: THREE.Vector3 | null;
+  headingLag: number;
+  headingNow: number | null;
+}
+
+// Trucks park at the road edge beside the substation yard on a road segment that
+// faces the default camera. Presentation only — the domain arrival tick is
+// unchanged. Feeder A sits on the west road at the yard's south junction (the
+// old link-road spot was screened by trees/housing); Feeder B takes the link
+// road east of its yard.
+const PARK: Record<FeederId, [number, number]> = {
+  'feeder-a': [-8, -1.4],
+  'feeder-b': [7.1, -1.8],
+};
+const parkSpot = (feeder: FeederId): THREE.Vector3 =>
+  new THREE.Vector3(PARK[feeder][0], .48, PARK[feeder][1]);
+
+// Idle trucks sit nose-in at the depot's two garage doors (doors at depot ±.72).
+// Trucks are 1.9 long — parking them along x at the old 1.3 spacing made them
+// interpenetrate, so they face the doors and stack across x instead.
+const depotSpot = (index: number): THREE.Vector3 =>
+  new THREE.Vector3(POSITIONS.depot[0] + (index ? .72 : -.72), .48, POSITIONS.depot[1] + 2.25);
+
+export class Fleet {
+  private trucks = new Map<CrewId, Truck>();
+  private dummy = new THREE.Object3D();
+
+  constructor(private ctx: SceneContext, lights: SceneLights) {
+    for (const [index, id] of CREW_IDS.entries()) {
+      const truck = this.buildTruck(index);
+      lights.attachVan(truck.headlightMounts);
+      this.trucks.set(id, truck);
+      ctx.world.add(truck.root);
+    }
+    this.buildParkedCars();
+    this.buildDeliveryBoat();
+  }
+
+  private buildTruck(index: number): Truck {
+    const ctx = this.ctx;
+    const paint = CREW_PAINT[index]!;
+    const root = new THREE.Group();
+    const body = new THREE.Group();
+    root.add(body);
+
+    // Painted clearcoat body: cab, crew box, amber stripe — one merged mesh.
+    const bodyParts: THREE.BufferGeometry[] = [];
+    part(bodyParts, paint, .5, .78, .74, .7, .69, 0);        // cab
+    part(bodyParts, paint, 1.3, 1.0, .76, -.3, .87, 0);      // crew box
+    part(bodyParts, STRIPE, 1.32, .13, .78, -.3, .6, 0);     // amber band
+    part(bodyParts, paint, .06, .12, .7, .96, .98, 0);       // cab brow above the windscreen
+    const bodyGeometry = ctx.track(mergeGeometries(bodyParts)!);
+    bodyParts.forEach(g => g.dispose());
+    const bodyMaterial = ctx.track(new THREE.MeshPhysicalMaterial({
+      map: paintedMetal(ctx, '#ffffff').map, vertexColors: true,
+      roughness: .45, metalness: .1, clearcoat: .6, clearcoatRoughness: .25, envMapIntensity: .8,
+    }));
+    const bodyMesh = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    bodyMesh.castShadow = true;
+    body.add(bodyMesh);
+
+    // Matte dark parts: chassis, wheel wells, bumpers, mirrors, rack, turntable.
+    const darkParts: THREE.BufferGeometry[] = [];
+    const dark = 0x22282c;
+    part(darkParts, dark, 1.78, .14, .62, -.02, .3, 0);            // chassis
+    part(darkParts, 0x151a1d, .42, .2, .68, .62, .27, 0);          // front wheel well
+    part(darkParts, 0x151a1d, .85, .2, .68, -.45, .27, 0);         // rear wheel well
+    part(darkParts, dark, .08, .14, .74, .97, .24, 0);             // front bumper
+    part(darkParts, dark, .1, .14, .78, -.94, .24, 0);             // rear bumper
+    for (const z of [-.4, .4]) {
+      part(darkParts, dark, .1, .025, .025, .93, .78, z);          // mirror arms
+      part(darkParts, dark, .025, .15, .1, .97, .85, z * 1.12);    // mirror heads
+    }
+    for (const z of [-.29, .29]) part(darkParts, dark, 1.15, .035, .035, -.3, 1.415, z); // rack rails
+    for (let i = 0; i < 6; i++) part(darkParts, dark, .035, .035, .58, -.78 + i * .19, 1.44, 0);   // rungs
+    part(darkParts, dark, .42, .06, .52, .7, 1.11, 0);             // light-bar housing
+    part(darkParts, 0x4d575b, .3, .22, .3, .1, .22, -.26);         // side toolbox
+    const turntable = new THREE.CylinderGeometry(.11, .12, .05, 10);
+    turntable.translate(-.82, 1.42, 0);
+    const turntableColors = new Float32Array(turntable.getAttribute('position').count * 3);
+    const darkC = new THREE.Color(dark);
+    for (let i = 0; i < turntableColors.length; i += 3) turntableColors.set([darkC.r, darkC.g, darkC.b], i);
+    turntable.setAttribute('color', new THREE.BufferAttribute(turntableColors, 3));
+    darkParts.push(turntable);
+    const darkGeometry = ctx.track(mergeGeometries(darkParts)!);
+    darkParts.forEach(g => g.dispose());
+    const darkMaterial = ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .85, metalness: .05, envMapIntensity: .5 }));
+    const darkMesh = new THREE.Mesh(darkGeometry, darkMaterial);
+    darkMesh.castShadow = true;
+    body.add(darkMesh);
+
+    // Tinted glass: windscreen + cab side windows, slightly inset.
+    const glassParts: THREE.BufferGeometry[] = [];
+    part(glassParts, 0xffffff, .03, .3, .58, .936, .86, 0);
+    for (const z of [-.365, .365]) part(glassParts, 0xffffff, .28, .24, .02, .72, .9, z);
+    const glassGeometry = ctx.track(mergeGeometries(glassParts)!);
+    glassParts.forEach(g => g.dispose());
+    const glassMaterial = ctx.track(new THREE.MeshPhysicalMaterial({
+      color: 0x1a2430, roughness: .1, metalness: .2, transmission: 0, envMapIntensity: 1.2,
+    }));
+    body.add(new THREE.Mesh(glassGeometry, glassMaterial));
+
+    // Emissive fittings: headlights, tail lights, amber light bar (strobe).
+    const head = ctx.track(new THREE.MeshStandardMaterial({ color: 0x2e2c24, emissive: 0xf5e9c8, emissiveIntensity: .2 }));
+    const tail = ctx.track(new THREE.MeshStandardMaterial({ color: 0x381d19, emissive: 0xd8543c, emissiveIntensity: .12 }));
+    const strobe = ctx.track(new THREE.MeshStandardMaterial({ color: 0x4a3517, emissive: STRIPE, emissiveIntensity: .12 }));
+    const headGeometry = ctx.track(mergeGeometries([.22, -.22].map(z => new THREE.BoxGeometry(.04, .1, .13).translate(.965, .42, z)))!);
+    const tailGeometry = ctx.track(mergeGeometries([.3, -.3].map(z => new THREE.BoxGeometry(.03, .09, .11).translate(-.962, .42, z)))!);
+    const strobeGeometry = ctx.track(new THREE.BoxGeometry(.36, .05, .46));
+    const strobeMesh = new THREE.Mesh(strobeGeometry, strobe);
+    strobeMesh.position.set(.7, 1.165, 0);
+    body.add(new THREE.Mesh(headGeometry, head), new THREE.Mesh(tailGeometry, tail), strobeMesh);
+    const headlightMounts = [.22, -.22].map(z => {
+      const mount = new THREE.Object3D();
+      mount.position.set(.98, .42, z);
+      body.add(mount);
+      return mount;
+    });
+
+    // Rear: ribbed roll-up door (corrugated normal, rotated for horizontal ribs)
+    // above a reflective chevron panel.
+    const doorNormal = ctx.track(corrugated(ctx).normalMap!.clone());
+    doorNormal.center.set(.5, .5);
+    doorNormal.rotation = Math.PI / 2;
+    doorNormal.repeat.set(1, 3);
+    doorNormal.needsUpdate = true;
+    const doorMaterial = ctx.track(new THREE.MeshStandardMaterial({ color: paint, normalMap: doorNormal, roughness: .5, metalness: .15, envMapIntensity: .6 }));
+    const door = new THREE.Mesh(ctx.track(new THREE.BoxGeometry(.02, .62, .6)), doorMaterial);
+    door.position.set(-.956, .98, 0);
+    const chevronTexture = chevrons(ctx);
+    chevronTexture.repeat.set(2, 1);
+    const chevronMaterial = ctx.track(new THREE.MeshStandardMaterial({
+      map: chevronTexture, emissiveMap: chevronTexture, emissive: 0x9a9a9a, emissiveIntensity: .35, roughness: .5,
+    }));
+    const chevron = new THREE.Mesh(ctx.track(new THREE.BoxGeometry(.02, .3, .72)), chevronMaterial);
+    chevron.position.set(-.958, .55, 0);
+    body.add(door, chevron);
+
+    // Six wheels: one InstancedMesh for tyres, one for rims (a spoke makes the
+    // rotation readable). Matrices are rewritten per frame while rolling.
+    const tyreGeometry = ctx.track(new THREE.CylinderGeometry(.17, .17, .12, 14).rotateX(Math.PI / 2));
+    const rimGeometry = ctx.track(mergeGeometries([
+      new THREE.CylinderGeometry(.095, .095, .135, 10).rotateX(Math.PI / 2),
+      new THREE.BoxGeometry(.16, .03, .14),
+    ])!);
+    const tyreMaterial = ctx.track(new THREE.MeshStandardMaterial({ color: 0x1d2327, roughness: .95, metalness: 0, envMapIntensity: .4 }));
+    const rimMaterial = ctx.track(new THREE.MeshStandardMaterial({ color: 0x8f979b, roughness: .5, metalness: .4, envMapIntensity: .7 }));
+    const tyres = new THREE.InstancedMesh(tyreGeometry, tyreMaterial, 6);
+    const rims = new THREE.InstancedMesh(rimGeometry, rimMaterial, 6);
+    tyres.castShadow = true;
+    root.add(tyres, rims);
+
+    // Boom on a turntable at the rear of the box roof; arms and bucket animate.
+    // Safety orange reads against the night palette at default zoom.
+    const armMaterial = ctx.track(new THREE.MeshPhysicalMaterial({
+      color: 0xe0722a, roughness: .45, metalness: .1,
+      clearcoat: .6, clearcoatRoughness: .25, envMapIntensity: .8,
+    }));
+    const pivot = new THREE.Group();
+    pivot.position.set(-.82, 1.47, 0);
+    const lower = new THREE.Group();
+    const lowerArm = new THREE.Mesh(ctx.track(new THREE.BoxGeometry(.95, .11, .11)), armMaterial);
+    lowerArm.position.x = .475;
+    lowerArm.castShadow = true;
+    lower.add(lowerArm);
+    const elbow = new THREE.Group();
+    elbow.position.x = .95;
+    const upperArm = new THREE.Mesh(ctx.track(new THREE.BoxGeometry(.8, .09, .09)), armMaterial);
+    upperArm.position.set(.4, .07, 0);
+    upperArm.castShadow = true;
+    elbow.add(upperArm);
+    const bucket = new THREE.Group();
+    bucket.position.set(.8, .07, 0);
+    const bucketParts: THREE.BufferGeometry[] = [];
+    const orange = 0xe0722a, bucketIn = 0xd8d2c4;
+    part(bucketParts, orange, .3, .03, .3, 0, .06, 0);               // floor
+    for (const z of [-.135, .135]) part(bucketParts, orange, .3, .25, .03, 0, .2, z);
+    for (const x of [-.135, .135]) part(bucketParts, orange, .03, .25, .3, x, .2, 0);
+    part(bucketParts, bucketIn, .24, .01, .24, 0, .08, 0);           // pale interior
+    const bucketMaterial = ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .55, metalness: .15, envMapIntensity: .7 }));
+    const bucketMesh = new THREE.Mesh(ctx.track(mergeGeometries(bucketParts)!), bucketMaterial);
+    bucketParts.forEach(g => g.dispose());
+    bucketMesh.castShadow = true;
+    bucket.add(bucketMesh);
+    // Work lamp on the bucket lip — pops at night once the boom is up.
+    const lamp = ctx.track(new THREE.MeshStandardMaterial({ color: 0x3a352b, emissive: 0xffe6b0, emissiveIntensity: 0 }));
+    const lampMesh = new THREE.Mesh(ctx.track(new THREE.BoxGeometry(.1, .04, .04)), lamp);
+    lampMesh.position.set(.1, .34, 0);
+    bucket.add(lampMesh);
+    // Work light: a spot firing down into the yard plus a soft volumetric cone
+    // under the bucket — the "crew working here" signal at default zoom. The
+    // bucket group is level-compensated, so local -y stays world-down.
+    const workSpot = new THREE.SpotLight(0xffe2b0, 0, 7, .6, .6);
+    workSpot.castShadow = false;
+    workSpot.position.set(0, .12, 0);
+    const workTarget = new THREE.Object3D();
+    workTarget.position.set(0, -2.6, 0);
+    workSpot.target = workTarget;
+    const workConeMaterial = ctx.track(new THREE.MeshBasicMaterial({
+      color: 0xffe2b0, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    }));
+    softCone(workConeMaterial);
+    const workCone = new THREE.Mesh(ctx.track(new THREE.ConeGeometry(1.15, 2.5, 12, 1, true)), workConeMaterial);
+    workCone.position.set(0, -1.25, 0);
+    bucket.add(workSpot, workTarget, workCone);
+    elbow.add(bucket);
+    lower.add(elbow);
+    pivot.add(lower);
+    body.add(pivot);
+
+    // Warm additive pool spread over the substation yard while the boom is up;
+    // in world space so it sits on the transformer regardless of truck pose.
+    const workPoolMaterial = ctx.track(new THREE.MeshBasicMaterial({
+      color: 0xffd9a0, transparent: true, opacity: 0,
+      alphaMap: poolGradient(ctx), blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const workPool = new THREE.Mesh(ctx.track(new THREE.CircleGeometry(2.6, 24).rotateX(-Math.PI / 2)), workPoolMaterial);
+    workPool.visible = false;
+    ctx.world.add(workPool);
+
+    // Amber flare above the light bar so the strobe reads at distance.
+    const flashMaterial = ctx.track(new THREE.SpriteMaterial({
+      map: poolGradient(ctx), color: 0xffbf6a, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const flash = new THREE.Sprite(flashMaterial);
+    flash.scale.setScalar(.9);
+    flash.position.set(.7, 1.45, 0);
+    body.add(flash);
+
+    // Four outriggers slide out sideways as the boom rises.
+    const outriggers: THREE.Mesh[] = [];
+    for (const x of [.55, -.72]) for (const z of [-1, 1]) {
+      const leg = new THREE.Mesh(ctx.track(new THREE.BoxGeometry(.12, .07, .4)), darkMaterial);
+      leg.position.set(x, .26, z * .28);
+      leg.castShadow = true;
+      outriggers.push(leg);
+      body.add(leg);
+    }
+
+    return {
+      root, body, headlightMounts, tyres, rims, pivot, lower, elbow, bucket, outriggers,
+      head, tail, strobe, chevron: chevronMaterial, lamp,
+      workSpot, workPool, workCone, flash, site: null,
+      boom: 0, distance: 0, prev: null, headingLag: 0, headingNow: null,
+    };
+  }
+
+  // Kerb-parked civilian cars: muted colours, static, no lights. All merged into
+  // one vertex-coloured mesh (single draw call).
+  private buildParkedCars(): void {
+    const parts: THREE.BufferGeometry[] = [];
+    const colors = [0x5a6a6e, 0x7a6f66, 0x40484e, 0x6b7a85, 0x8a8078, 0x4f5a5f];
+    const dark = 0x1c2226, glass = 0x1a2430;
+    // [x, z, heading, pickup]
+    const spots: [number, number, number, boolean][] = [
+      [-10.7, 1.32, 0, false], [10.7, 2.28, Math.PI, true],
+      [-8.48, -6.6, Math.PI / 2, false], [8.48, -6.9, -Math.PI / 2, true],
+      [1.8, -1.58, 0, false], [-4.8, -2.62, Math.PI, true],
+    ];
+    spots.forEach(([x, z, heading, pickup], i) => {
+      const local: THREE.BufferGeometry[] = [];
+      const c = colors[i]!;
+      if (pickup) {
+        part(local, c, 1.1, .2, .48, 0, .26, 0);
+        part(local, c, .44, .3, .46, .18, .5, 0);
+        part(local, glass, .3, .2, .48, .18, .56, 0);
+        part(local, dark, .58, .1, .44, -.28, .36, 0);        // bed walls read dark
+        part(local, dark, .9, .1, .4, 0, .13, 0);
+      } else {
+        part(local, c, 1.0, .26, .48, 0, .31, 0);
+        part(local, c, .52, .22, .44, -.04, .54, 0);
+        part(local, glass, .46, .16, .46, -.04, .56, 0);
+        part(local, dark, .9, .1, .4, 0, .13, 0);
+      }
+      for (const wx of [-.32, .32]) for (const wz of [-.22, .22]) {
+        const wheel = new THREE.CylinderGeometry(.09, .09, .06, 8).rotateX(Math.PI / 2);
+        const colorsA = new Float32Array(wheel.getAttribute('position').count * 3);
+        const dc = new THREE.Color(dark);
+        for (let k = 0; k < colorsA.length; k += 3) colorsA.set([dc.r, dc.g, dc.b], k);
+        wheel.setAttribute('color', new THREE.BufferAttribute(colorsA, 3));
+        wheel.translate(wx, .09, wz);
+        local.push(wheel);
+      }
+      const car = mergeGeometries(local)!;
+      local.forEach(g => g.dispose());
+      car.rotateY(heading);
+      car.translate(x, .46, z);
+      parts.push(car);
+    });
+    const geometry = this.ctx.track(mergeGeometries(parts)!);
+    parts.forEach(g => g.dispose());
+    const material = this.ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .55, metalness: .15, envMapIntensity: .7 }));
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    this.ctx.world.add(mesh);
+  }
+
+  // Small delivery boat tied alongside the pier (east side).
+  private buildDeliveryBoat(): void {
+    const parts: THREE.BufferGeometry[] = [];
+    part(parts, 0x51606a, .85, .4, 2.3, 0, .22, 0);              // hull
+    part(parts, 0x3c464d, .7, .12, 2.0, 0, .46, 0);              // deck
+    part(parts, 0x7d8a90, .6, .45, .7, 0, .72, -.55);            // wheelhouse
+    part(parts, 0x1a2430, .62, .18, .5, 0, .8, -.55);            // windows
+    part(parts, 0x39454a, .06, .8, .06, 0, 1.0, .6);             // mast
+    const geometry = this.ctx.track(mergeGeometries(parts)!);
+    parts.forEach(g => g.dispose());
+    const material = this.ctx.track(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .6, metalness: .15, envMapIntensity: .7 }));
+    const boat = new THREE.Mesh(geometry, material);
+    boat.position.set(-8.25, -.62, 12.2);
+    boat.rotation.y = .12;
+    boat.castShadow = true;
+    this.ctx.world.add(boat);
+  }
+
+  // True while a raised boom is over this feeder's yard — used to keep the
+  // transformer spark shower livelier under an active crew.
+  workingAt(feeder: FeederId): boolean {
+    for (const truck of this.trucks.values()) if (truck.site === feeder) return true;
+    return false;
+  }
+
+  // Per-frame presentation update: travel interpolation on the authored route,
+  // wheel roll, suspension, parking pose, boom and outriggers, light materials.
+  update(state: State, fraction: number, now: number, dt: number, nightness: number): void {
+    const reduced = this.ctx.reduced.matches;
+    for (const [index, id] of CREW_IDS.entries()) {
+      const crew = state.crews[id];
+      const truck = this.trucks.get(id)!;
+      const traveling = crew.phase === 'traveling' && crew.target !== null;
+      let heading = 0;
+      if (traveling) {
+        const target = crew.target!;
+        const [tx, tz] = POSITIONS[target];
+        const park = parkSpot(target);
+        const origin = POSITIONS[crew.origin];
+        // Exit/approach jogs only exist where the curb spot sits off the road
+        // axis — an axis-parked truck just drives straight to/from the junction.
+        const departure = crew.origin === 'depot'
+          ? [depotSpot(index), new THREE.Vector3(-.9, .48, 6.3), new THREE.Vector3(-.9, .48, 1.8)]
+          : Math.abs(parkSpot(crew.origin).x - origin[0]) < .1
+            ? [parkSpot(crew.origin), new THREE.Vector3(origin[0], .48, 1.8)]
+            : [parkSpot(crew.origin), new THREE.Vector3(origin[0], .48, origin[1] + 2.0), new THREE.Vector3(origin[0], .48, 1.8)];
+        const approach = Math.abs(park.x - tx) < .1
+          ? [park]
+          : [new THREE.Vector3(tx, .48, tz + 2.0), park];
+        const points = [...departure, new THREE.Vector3(tx, .48, 1.8), ...approach];
+        const lengths = points.slice(1).map((point, i) => point.distanceTo(points[i]!));
+        const progress = Math.min(1, Math.max(0, (state.tick + (reduced ? 0 : fraction) - crew.departedAt) / (crew.arriveAt - crew.departedAt)));
+        let distance = progress * lengths.reduce((sum, n) => sum + n, 0);
+        for (let segment = 0; segment < lengths.length; segment++) {
+          const length = lengths[segment]!;
+          if (distance <= length || segment === lengths.length - 1) {
+            const from = points[segment]!;
+            const to = points[segment + 1]!;
+            truck.root.position.lerpVectors(from, to, length ? distance / length : 0);
+            heading = -Math.atan2(to.z - from.z, to.x - from.x);
+            break;
+          }
+          distance -= length;
+        }
+      } else if (crew.location === 'depot') {
+        truck.root.position.copy(depotSpot(index));
+        heading = Math.PI / 2; // nose in at the garage door, rear to the apron
+      } else {
+        const park = parkSpot(crew.location);
+        truck.root.position.copy(park);
+        heading = Math.PI / 2; // nose north, rear toward the road
+      }
+      // Display heading eases toward the route heading so pull-outs and corner
+      // turns read as steering rather than a snap. Reduced motion snaps.
+      if (truck.headingNow === null || reduced) truck.headingNow = heading;
+      let turn = heading - truck.headingNow;
+      if (turn > Math.PI) turn -= Math.PI * 2;
+      if (turn < -Math.PI) turn += Math.PI * 2;
+      truck.headingNow += turn * Math.min(1, dt * 6);
+      truck.root.rotation.y = truck.headingNow;
+
+      // Cumulative distance drives wheel spin; lagged heading drives body roll.
+      let deltaHeading = 0;
+      if (truck.prev) {
+        truck.distance += truck.root.position.distanceTo(truck.prev);
+        deltaHeading = heading - truck.headingLag;
+        if (deltaHeading > Math.PI) deltaHeading -= Math.PI * 2;
+        if (deltaHeading < -Math.PI) deltaHeading += Math.PI * 2;
+      }
+      truck.prev = truck.root.position.clone();
+      truck.headingLag += deltaHeading * Math.min(1, dt * 4);
+      const roll = reduced ? 0 : THREE.MathUtils.clamp((heading - truck.headingLag) * .35, -.06, .06);
+      truck.body.position.y = !reduced && traveling ? Math.sin(truck.distance * 6) * .012 : 0;
+      truck.body.rotation.x = roll;
+      const spin = -truck.distance / .17;
+      for (let w = 0; w < 6; w++) {
+        this.dummy.position.set(WHEEL_SLOTS[w]![0], WHEEL_Y, WHEEL_SLOTS[w]![1]);
+        this.dummy.rotation.set(0, 0, spin);
+        this.dummy.updateMatrix();
+        truck.tyres.setMatrixAt(w, this.dummy.matrix);
+        truck.rims.setMatrixAt(w, this.dummy.matrix);
+      }
+      truck.tyres.instanceMatrix.needsUpdate = true;
+      truck.rims.instanceMatrix.needsUpdate = true;
+
+      // Boom: eased from repair progress (up by 10%, folding in the last 5%).
+      const p = crew.phase === 'repairing'
+        ? Math.min(1, Math.max(0, (state.tick + (reduced ? 0 : fraction) - crew.arriveAt) / Math.max(1, crew.completeAt - crew.arriveAt)))
+        : 0;
+      let boomTarget = crew.phase === 'repairing' ? smoothstep(0, .1, p) * (1 - smoothstep(.95, 1, p)) : 0;
+      if (reduced) boomTarget = p > 0 && p < 1 ? 1 : 0;
+      truck.boom += (boomTarget - truck.boom) * (reduced ? 1 : Math.min(1, dt * 5));
+      const boom = truck.boom;
+      truck.lower.rotation.z = FOLDED_LOWER + (RAISED_LOWER - FOLDED_LOWER) * boom;
+      truck.elbow.rotation.z = FOLDED_ELBOW + (RAISED_ELBOW - FOLDED_ELBOW) * boom;
+      // Yaw swings the raised boom toward the substation transformer.
+      let yaw = 0;
+      if (crew.location !== 'depot' && crew.phase !== 'traveling') {
+        const [fx, fz] = POSITIONS[crew.location];
+        const dx = fx - truck.root.position.x, dz = fz - truck.root.position.z;
+        const xL = Math.cos(heading) * dx - Math.sin(heading) * dz;
+        const zL = Math.sin(heading) * dx + Math.cos(heading) * dz;
+        yaw = Math.atan2(-zL, xL);
+      }
+      truck.pivot.rotation.y = yaw * boom;
+      truck.bucket.rotation.z = -(truck.lower.rotation.z + truck.elbow.rotation.z);
+      truck.outriggers.forEach((leg, i) => { leg.position.z = (i % 2 ? 1 : -1) * (.28 + .27 * boom); });
+
+      // Work light: spot + bucket cone + yard pool glow while the boom is up.
+      const working = boom > .5;
+      truck.site = working && crew.phase === 'repairing' && crew.location !== 'depot' ? crew.location : null;
+      truck.workSpot.intensity = working ? 60 : 0;
+      truck.workCone.material.opacity = working ? .12 : 0;
+      truck.workCone.visible = working;
+      truck.workPool.visible = working && truck.site !== null;
+      truck.workPool.material.opacity = truck.workPool.visible ? .3 : 0;
+      if (truck.site) {
+        const [fx, fz] = POSITIONS[truck.site];
+        truck.workPool.position.set(fx, .74, fz); // substation pad surface
+      }
+
+      // Lights: headlight emissive mirrors the spotlights (moving + night),
+      // tail lights on whenever moving, strobe while the crew is out.
+      truck.head.emissiveIntensity = traveling && nightness > .2 ? 1.6 : .2;
+      truck.tail.emissiveIntensity = traveling ? 1.5 : .12;
+      const out = crew.phase !== 'idle';
+      const strobeOn = (now * 2) % 1 < .12;
+      truck.strobe.emissiveIntensity = !out ? .12 : reduced ? 1.3 : strobeOn ? 4 : .15;
+      truck.flash.material.opacity = !out ? .08 : reduced ? .5 : strobeOn ? .85 : .05;
+      truck.chevron.emissiveIntensity = nightness * .35;
+      truck.lamp.emissiveIntensity = working ? 3 : 0;
+    }
+  }
+}
