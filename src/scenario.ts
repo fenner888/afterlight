@@ -7,12 +7,12 @@ export type CrewId = typeof CREW_IDS[number];
 export type NodeId = ServiceId | FeederId | 'supply' | 'depot';
 export const NODE_IDS: readonly NodeId[] = ['clinic', 'housing-a', 'housing-b', 'pump', 'beacon', 'feeder-a', 'feeder-b', 'supply', 'depot'];
 
-export const SERVICES: Record<ServiceId, { label: string; load: number; backup: number; description: string }> = {
-  clinic: { label: 'Clinic', load: 4, backup: 360, description: 'Six minutes of reserve. Grid power preserves what remains; it never recharges the backup.' },
-  'housing-a': { label: 'Housing A', load: 3, backup: 0, description: 'The west residential block. Its full 3 CU load must fit before the windows can return.' },
-  'housing-b': { label: 'Housing B', load: 3, backup: 0, description: 'The east residential block. Both housing groups fit on Feeder A, but not alongside the clinic.' },
-  pump: { label: 'Pumping station', load: 2, backup: 0, description: 'A 2 CU service. The pump has no backup and is not a dependency of any other service.' },
-  beacon: { label: 'Harbor beacon', load: 1, backup: 0, description: 'The harbor light needs 1 CU. Repairing a feeder alone does not turn the beacon on.' },
+export const SERVICES: Record<ServiceId, { label: string; load: number; backup: number; flavor: string; description: string }> = {
+  clinic: { label: 'Clinic', load: 4, backup: 360, flavor: 'Overnight ward — the district\'s only generator.', description: 'Six hours of reserve. Grid power preserves what remains; it never recharges the backup.' },
+  'housing-a': { label: 'Housing A', load: 3, backup: 0, flavor: 'The west apartment block.', description: 'Its full 3 CU load must fit before the windows can return.' },
+  'housing-b': { label: 'Housing B', load: 3, backup: 0, flavor: 'The east apartment block above the harbor shops.', description: 'Both housing groups fit on Feeder A, but not alongside the clinic.' },
+  pump: { label: 'Pumping station', load: 2, backup: 0, flavor: 'Water pressure for the hill streets.', description: 'A 2 CU service with no backup; it is not a dependency of any other service.' },
+  beacon: { label: 'Harbor beacon', load: 1, backup: 0, flavor: 'Guides the fishing boats home.', description: 'The harbor light needs 1 CU. Repairing a feeder alone does not turn the beacon on.' },
 };
 export const FEEDERS: Record<FeederId, { label: string; capacity: number; repairTicks: number }> = {
   'feeder-a': { label: 'Feeder A', capacity: 6, repairTicks: 180 },
@@ -28,6 +28,11 @@ export const isService = (id: string): id is ServiceId => SERVICE_IDS.some(value
 export const isFeeder = (id: string): id is FeederId => FEEDER_IDS.some(value => value === id);
 export const isCrew = (id: string): id is CrewId => CREW_IDS.some(value => value === id);
 export const isNode = (id: string): id is NodeId => NODE_IDS.some(value => value === id);
+export const formatDuration = (ticks: number): string => {
+  const t = Math.max(0, Math.floor(ticks));
+  return `${Math.floor(t / 60)}h ${String(Math.floor(t % 60)).padStart(2, '0')}m`;
+};
+
 export const formatTime = (ticks: number): string => `${Math.floor(ticks / 60).toString().padStart(2, '0')}:${Math.floor(ticks % 60).toString().padStart(2, '0')}`;
 
 export type DayPhase = 'dusk' | 'night' | 'dawn' | 'day';

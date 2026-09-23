@@ -57,6 +57,9 @@ export class SkyRig {
   private flashUntil = 0;
   private lastFlashTick = -1;
   flash = 0;
+  // Cloud coverage fraction — reused by the audio storm bed; do not recompute elsewhere.
+  coverage = .9;
+  onFlash?: () => void;
 
   constructor(ctx: SceneContext) {
     this.ctx = ctx;
@@ -136,7 +139,10 @@ export class SkyRig {
     world.background = new THREE.Color(0x0b1218);
   }
 
-  triggerFlash(now: number): void { this.flashUntil = Math.max(this.flashUntil, now + .12); }
+  triggerFlash(now: number): void {
+    this.flashUntil = Math.max(this.flashUntil, now + .12);
+    this.onFlash?.();
+  }
 
   update(tick: number, load: number, simPhase: string, day: string, now: number, dt: number): void {
     const { world, renderer } = this.ctx;
@@ -191,6 +197,7 @@ export class SkyRig {
     }
     world.environmentIntensity = 1.15 + 2.15 * n;
     const coverage = THREE.MathUtils.lerp(.9, .25, k);
+    this.coverage = coverage;
     for (const cloud of this.clouds) {
       cloud.map.offset.x = tick * cloud.speed;
       cloud.map.offset.y = tick * cloud.speed * .35;

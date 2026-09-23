@@ -94,3 +94,52 @@ Mark's verdict on the atmosphere pass: still not realistic enough to win; wants 
 - Motion: wheels roll with distance travelled; body has a subtle suspension bob and lean into turns along the authored route (none under reduced motion). Headlights on while moving at night; tail lights on whenever moving.
 - Set dressing: 5–7 parked civilian cars (two body types, muted colours, static, no lights) along kerbs, and one small delivery boat at the pier. They are decoration, not nodes.
 - Everything stays procedural and dependency-free (three's bundled examples are allowed). Reduced motion removes drift, flicker, rain, lightning, wave motion and stagger, but the day/night state, lit windows and reflections remain.
+
+## Clarity, sound and art — September 23 (Mark, fourth review)
+
+Mark approved three passes for September 23 (clarity, sound, art), then Storms 02/03 with a comparison summary for September 24. Domain rules, numbers, commands and determinism are unchanged by all three passes.
+
+### Clarity
+
+Problem found in review: a first-time player sees two clocks, a scene squeezed into ~35 % of the viewport, and a dilemma that is only implied.
+
+- **One clock.** The player only ever sees world time. Absolute moments use the world clock (`23:30`); durations use hours/minutes (`3h 00m`, `1h 50m`) via a `formatDuration(ticks)` helper (1 tick = 1 world minute). This applies to the header, task banner, decision cards, popovers, inspector readings, service strip, crew list, progress rings, event log, replay scrubber (`19:30 / 21:30`), run summary and ARIA text. Simulation `mm:ss` is shown only inside Diagnostics. Speed options read **Slow / Normal / Fast** (values 1 / 10 / 30 unchanged). Supersedes "world time next to simulation time" above.
+- **Layout (1440×900).** Header ≤ 56 px holding brand, incident, status tag, phase + world clock, sound toggle, Restart. The scene fills the left column and is **≥ 60 % of viewport height**; the inspector stays on the right (~320 px). The "Bring the neighborhood back." heading row is removed. Task banner and decision card become an overlay at the scene's top-left; the capacity readout becomes a compact overlay at the scene's top-right. Service strip becomes one compact row (≤ 56 px) directly below the scene. Transport + scrubber become one row (≤ 56 px). The full event list moves into the inspector as a scrollable **Event log** section below crews (same `#events` list). Popover must not be covered by the overlays. At 390 px: scene first at ≥ 45 vh, strip and transport follow, inspector below; no horizontal overflow.
+- **Remove dev chrome**: "STORM 01 / PROCEDURAL DIORAMA" scene note (keep N ↑), "FIRST PLAYABLE · V0.1", "Blockout" wording (Diagnostics stays, renamed "Diagnostics"), "There are no saved runs in this blockout." → "There are no saved runs."
+- **Say the stakes.** Briefing (title "Storm 01 — After the storm"):
+  1. "19:30. A storm has knocked out both feeders into the harbor district. Every building is dark."
+  2. "The clinic is on its generator — 6 hours of fuel, until about 01:30. Nothing else has backup."
+  3. "Two crews wait at the depot. Feeder A is the quick fix (3h, 6 of the 13 units the district needs). Feeder B is slow (7h, the other 7)."
+  4. "When power returns there won't be enough for everyone. You decide who gets it first."
+- Task banner (values computed from state, never hard-coded):
+  - No crews out: "Send both crews — click a broken feeder on the map."
+  - One crew out: "{Crew} is heading to {Feeder}. Send the other crew to the other feeder — or press Space to start with one."
+  - Waiting at 0 CU: "Crews working. {Feeder} due {hh:mm} · {Feeder} due {hh:mm}." plus " Clinic generator until {hh:mm}." while the clinic is on backup.
+  - Capacity online: "{free} of {online} units free. Click a dark building to reconnect it." plus the clinic generator clause when relevant.
+  - Restored: "Every light is back on at {hh:mm}. Watch the sun come up, or review your run."
+- Decision cards:
+  - A feeder repaired while demand still exceeds capacity: title "{Feeder} is back — {online} units online"; text "Not enough for everyone ({demand} needed)." + (clinic on backup) " The clinic generator runs out at {hh:mm}" + (other feeder repairing) "; {Feeder} isn't due until {hh:mm}" + ". Click buildings to reconnect, then Resume."
+  - A feeder repaired with capacity for all remaining load: "{Feeder} is back — {online} units online" / "Enough for everyone. Reconnect every building still dark."
+  - Backup warning (one world hour left): "Clinic generator: 1h of fuel left" / "At {hh:mm} the clinic goes dark unless it's reconnected." + (free < 4) " Disconnect another building to free 4 units, or let it go."
+  - Backup exhausted: "The clinic has gone dark" / "It stays dark until you reconnect it — 4 units."
+  - Dawn: unchanged.
+- Service flavor line shown first in inspector and popover (fiction only, no mechanics): Clinic "Overnight ward — the district's only generator."; Housing A "The west apartment block."; Housing B "The east apartment block above the harbor shops."; Pumping station "Water pressure for the hill streets."; Harbor beacon "Guides the fishing boats home." Existing mechanical descriptions follow, rewritten to durations in hours ("Six hours of reserve…").
+- Run summary adds one factual outcome line before the table: "The clinic never lost power." or "The clinic was dark for {duration}." followed by "Homes were dark for up to {max housing downtime}." No score, no verdict.
+
+### Sound
+
+- Procedural Web Audio only (`AudioContext`, oscillators, filtered noise buffers, gain envelopes, one `DynamicsCompressor` limiter on the master). No audio files, no packages. Lives in `src/audio.ts`; it reads state/events and scene cues and never feeds back into the domain.
+- The context is created/resumed by the **Begin** (or Skip) click; sound is **on by default** after that gesture. Header toggle button "Sound on/off" (`aria-pressed`) and the `M` key mute/unmute with a short fade. Hidden tab suspends the context; returning resumes it only if unmuted. No persistence of the preference in this milestone. WebGL failure does not disable sound.
+- Master level conservative (peak ≲ −6 dBFS after the limiter); ambience sits well under event cues.
+- Beds (continuous, crossfaded ≥ 1 s): rain (band-limited noise, level follows the scene's rain density), sea swell (low noise with slow gain LFO), wind (bandpassed noise, slow filter sweep, fades as the storm clears), clinic generator (low pulsed drone) while the clinic is on backup, faint transformer hum per repaired feeder.
+- Cues: thunder rumble a short delay after each lightning flash (driven by the same deterministic lightning timing); truck engine drone while any crew travels, with a hydraulic whine as the boom raises; intermittent electrical crackle while repairing; feeder repaired = heavy relay clunk + hum swell; reconnect = relay click + a soft pitched chime per service; disconnect = descending click; rejected action = short dull buzz; backup warning = two soft alert tones; generator stop = sputter-out; decision pause = one quiet tone; sunrise = slow warm pad swell while rain/wind fade out.
+- Replay: beds follow the replay cursor state; one-shot cues are silent while scrubbing/reviewing. Restart stops everything and re-arms. Reduced motion does not mute; it removes the lightning/thunder pairing only because lightning is already disabled.
+
+### Art (buildings, trees, quay, boat, cars)
+
+- Buildings: parapet/cornice caps, stepped massing, framed windows (inset with sill and lintel, instanced), ground-floor entrances with doors and awnings/canopies, drainpipes, rooftop clutter (HVAC boxes, vents, water tank on housing, antenna). Clinic: entrance canopy with a lit cross sign and a visible generator unit with exhaust stack. Pumping station: pipework and a tank. Lighthouse: gallery railing and glazed lantern room. A distant fog-faded shoreline with a few lit windows across the water (decoration, not nodes), which also softens the horizon band.
+- Trees: clustered foliage (3–5 lumps with colour variation) on trunks, instanced; no single cones.
+- Quay: the platform reads as a stone seawall standing in the water — coursed stone faces that continue below the waterline, capstone lip, darker waterline band, timber pilings under the pier, ladders, tyre fenders, riprap at one corner. No floating-slab edge.
+- Boats: shaped hulls (pointed bow, sheer line, rub rail), wheelhouse with windows, mast with a small light, mooring lines to bollards, gentle bob (none under reduced motion).
+- Cars: two body types (sedan, hatchback) with shaped profiles, glass, wheels, wet sheen; static, unlit.
+- Budget at 1440×900 restored night: ≤ 1,150 draw calls, p95 frame ≤ 17.5 ms on the M4; use `InstancedMesh`/`BufferGeometryUtils.mergeGeometries` from three's bundled examples. Dispose everything on teardown.

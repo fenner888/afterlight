@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Storm 01 first-playable blockout implemented September 21, 2026 after kickoff authorization. Deterministic domain, manual reconnection/reallocation, crew motion, per-service downtime, keyboard flow, pause and read-only replay are ready for Mark's gameplay review. Stop here: no detailed art, additional features, commits or deployment before that review.
+Storm 01 playable with guided flow, WebGL day/night diorama and utility trucks, reviewed by Mark across September 21–23. Baseline committed locally September 23 (not pushed). Approved for September 23: clarity, sound and art passes ([spec](first-playable/requirements.md#clarity-sound-and-art--september-23-mark-fourth-review)). Approved for September 24: Storms 02/03 and a comparison summary (spec to be written first). Public repository, deployment, video and submission still require Mark's approval.
 
 ## Build-week proposal
 

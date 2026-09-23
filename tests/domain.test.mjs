@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, execute, advance, capacity, connectedLoad, serviceStatus, nextTransition, stateHash, phase } from '../src/domain.ts';
-import { worldMinutes, formatWorldTime, dayPhase } from '../src/scenario.ts';
+import { worldMinutes, formatWorldTime, formatDuration, dayPhase } from '../src/scenario.ts';
 import { replay } from '../src/history.ts';
 import { Clock } from '../src/clock.ts';
 
@@ -221,6 +221,14 @@ test('phase follows dispatch, waiting, restore and restored', () => {
   assert.equal(phase(act(full, { type: 'disconnect', target: 'beacon' })), 'restore');
   const waiting = advance(dispatch(initialState(), 'crew-1', 'feeder-b'), 240);
   assert.equal(phase(waiting), 'dispatch');
+});
+
+test('durations format as hours and minutes with negative clamping', () => {
+  assert.equal(formatDuration(0), '0h 00m');
+  assert.equal(formatDuration(45), '0h 45m');
+  assert.equal(formatDuration(110), '1h 50m');
+  assert.equal(formatDuration(360), '6h 00m');
+  assert.equal(formatDuration(-5), '0h 00m');
 });
 
 test('world clock maps ticks to 19:30 dusk through 06:30 day', () => {

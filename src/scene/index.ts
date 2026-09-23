@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { NODE_IDS, CREW_IDS, FEEDER_IDS, SERVICE_IDS, SERVICES, LABELS, isService, isFeeder, formatTime, dayPhase } from '../scenario.ts';
+import { NODE_IDS, CREW_IDS, FEEDER_IDS, SERVICE_IDS, SERVICES, LABELS, isService, isFeeder, formatDuration, dayPhase } from '../scenario.ts';
 import type { NodeId, CrewId, FeederId, ServiceId } from '../scenario.ts';
 import { capacity, connectedLoad, phase, serviceStatus } from '../domain.ts';
 import type { State } from '../domain.ts';
@@ -69,6 +69,8 @@ export class DistrictScene {
   private canvasHost: HTMLElement;
   private onSelect: (id: NodeId) => void;
   private onNotice: (message: string) => void;
+  private rainLevel = 0;
+  onLightning?: () => void;
 
   constructor(canvasHost: HTMLElement, markerHost: HTMLElement, onSelect: (id: NodeId) => void, onNotice: (message: string) => void) {
     this.canvasHost = canvasHost;
@@ -102,6 +104,7 @@ export class DistrictScene {
     this.controls.update();
     this.controls.saveState();
     this.sky = new SkyRig(this.ctx);
+    this.sky.onFlash = () => this.onLightning?.();
     this.sea = new Sea(this.ctx, this.sky.sunDir, this.sky.moonDir);
     this.lights = new SceneLights(this.ctx);
     this.district = buildDistrict(this.ctx);
@@ -259,7 +262,7 @@ export class DistrictScene {
       const start = traveling ? crew.departedAt : crew.arriveAt;
       const progress = done === start ? 1 : Math.min(1, Math.max(0, (state.tick - start) / (done - start)));
       ring.fill.style.strokeDasharray = traveling ? '5 4' : `${progress * 100} 100`;
-      ring.label.textContent = traveling ? `arrives ${formatTime(Math.max(0, done - state.tick))}` : formatTime(Math.max(0, done - state.tick));
+      ring.label.textContent = traveling ? `arrives in ${formatDuration(done - state.tick)}` : formatDuration(done - state.tick);
     }
     const powerKey = `${FEEDER_IDS.map(id => state.feeders[id]).join(',')}|${SERVICE_IDS.map(id => state.services[id].connected ? 1 : 0).join('')}|${available > 0 ? 1 : 0}`;
     if (powerKey !== this.powerKey) {
@@ -367,6 +370,7 @@ export class DistrictScene {
     if (beaconOn && !reduced) this.district.beaconPivot.rotation.y = now * .5;
     if (this.rain && this.rainPositions && this.rainMaterial) {
       const density = (1 - .78 * connectedLoad(state) / 13) * (.45 + .55 * this.sky.nightness);
+      this.rainLevel = density;
       this.rain.geometry.setDrawRange(0, Math.floor(1500 * density));
       this.rainMaterial.opacity = .3 + .25 * this.sky.nightness;
       if (this.rain.visible) {
@@ -432,6 +436,10 @@ export class DistrictScene {
     const rect = marker.getBoundingClientRect();
     return { x: rect.left - host.left, y: rect.top - host.top, w: rect.width, h: rect.height };
   }
+
+  // Audio beds follow the same rain/storm values the renderer uses — no duplicated formulas.
+  get rainDensity(): number { return this.rainLevel; }
+  get stormLevel(): number { return this.sky.coverage; }
 
   reset(): void { this.controls.reset(); }
   zoom(delta: number): void {

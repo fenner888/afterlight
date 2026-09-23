@@ -37,7 +37,7 @@ Start with procedural blockout geometry. Blender/glTF hero assets are optional l
 - Pair every state with text/icons/line styles; no color-only information.
 - Humanist sans plus small monospace labels, two families maximum. Verify licenses/readability before choosing font files; system fallbacks initially.
 - Spacing 4/8/12/16/24/32 px; quiet outlines; 4–8 px radii.
-- Proposed interface transitions 140–220 ms. Reduced motion removes camera interpolation and decorative weather without hiding state. Sound optional and initially muted.
+- Proposed interface transitions 140–220 ms. Reduced motion removes camera interpolation and decorative weather without hiding state. Procedural sound starts with the Begin click and has a visible mute toggle (M key); see the September 23 spec section.
 
 ## Interaction beats
 

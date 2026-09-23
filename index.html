@@ -14,24 +14,23 @@
       <header class="masthead">
         <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>AFTERLIGHT</h1></div>
         <div class="incident-label"><span class="eyebrow">INCIDENT 01</span><span>After the storm</span></div>
-        <div class="header-status"><span id="mode" class="status-tag">PAUSED</span><time id="world-time" aria-label="World time">DUSK · 19:30</time><time id="time" aria-label="Simulation time">00:00</time></div>
+        <div class="header-status"><span id="mode" class="status-tag">PAUSED</span><time id="world-time" aria-label="World time">DUSK · 19:30</time></div>
+        <button id="sound-toggle" class="quiet-button" aria-pressed="false">Sound off</button>
         <button id="restart" class="quiet-button">Restart</button>
       </header>
       <main class="workspace">
         <section class="district" aria-label="Coastal district">
-          <div class="scene-heading">
-            <div><span class="eyebrow">COASTAL DISTRICT / STORM 01</span><h2>Bring the neighborhood back.</h2></div>
-            <div class="capacity-readout"><span class="eyebrow">CONNECTED / AVAILABLE</span><div><strong id="load">0</strong><span class="capacity-slash"> / </span><strong id="capacity">0</strong><span class="unit"> CU</span></div><div id="capacity-bar" class="capacity-bar" role="img" aria-label="0 of 0 CU connected, 13 CU total demand"></div><span id="headroom">0 CU headroom · 13 CU demand</span></div>
-          </div>
-          <div class="guidance-slot">
-            <p id="task-banner" role="status"></p>
-            <div id="decision" role="alert" aria-live="assertive" hidden><div><strong id="decision-title"></strong><span id="decision-text"></span></div><button id="resume">Resume</button></div>
-          </div>
           <div id="scene" class="scene">
             <div id="scene-canvas" class="scene-canvas"></div>
+            <div class="guidance-overlay">
+              <p id="task-banner" role="status"></p>
+              <div id="decision" role="alert" aria-live="assertive" hidden><div><strong id="decision-title"></strong><span id="decision-text"></span></div><button id="resume">Resume</button></div>
+            </div>
+            <div class="capacity-overlay"><span class="eyebrow">CONNECTED / AVAILABLE</span><div><strong id="load">0</strong><span class="capacity-slash"> / </span><strong id="capacity">0</strong><span class="unit"> CU</span></div><div id="capacity-bar" class="capacity-bar" role="img" aria-label="0 of 0 CU connected, 13 CU total demand"></div><span id="headroom">0 CU headroom · 13 CU demand</span></div>
             <div id="scene-markers" class="scene-markers" aria-label="Select a district node">
               <div id="node-actions" role="dialog" aria-modal="false" aria-labelledby="popover-title" hidden>
                 <div class="popover-head"><h3 id="popover-title">Node</h3><button id="popover-close" aria-label="Close actions">×</button></div>
+                <p id="popover-flavor" class="popover-flavor"></p>
                 <p id="popover-status"></p>
                 <div id="popover-actions"></div>
                 <p id="popover-hint" class="action-hint"></p>
@@ -40,11 +39,10 @@
               </div>
             </div>
             <p id="render-notice" class="render-notice" role="status" hidden></p>
-            <div class="scene-note"><span class="north-mark" aria-hidden="true">N ↑</span><span>STORM 01<br />PROCEDURAL DIORAMA</span></div>
+            <div class="scene-note"><span class="north-mark" aria-hidden="true">N ↑</span></div>
             <div class="camera-tools" role="group" aria-label="Camera controls"><button id="rotate-left" aria-label="Rotate camera left">↶</button><button id="rotate-right" aria-label="Rotate camera right">↷</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="reset-camera">Reset view</button></div>
           </div>
-          <div class="service-strip-heading"><span class="eyebrow">SERVICE STATUS</span><span>Outage time excludes backup operation</span></div>
-          <div id="service-strip" class="service-strip" aria-label="Services and accumulated downtime"></div>
+          <div id="service-strip" class="service-strip" aria-label="Services and accumulated downtime; outage time excludes backup operation"></div>
         </section>
         <aside class="inspector" aria-labelledby="inspector-title">
           <div class="inspector-scroll">
@@ -53,6 +51,7 @@
           <div id="inspector-body">
             <div class="selection-heading"><span id="node-number" class="node-number">01</span><h2 id="inspector-title" tabindex="-1">Clinic</h2></div>
             <p id="node-status" class="node-status" data-tone="backup">Backup power</p>
+            <p id="node-flavor" class="node-flavor"></p>
             <p id="node-description" class="node-description"></p>
             <div id="service-detail">
               <dl class="readings"><div><dt>Service load</dt><dd id="service-load"></dd></div><div><dt>Backup remaining</dt><dd id="backup"></dd></div><div><dt>Service downtime</dt><dd id="downtime"></dd></div><div><dt>Grid connection</dt><dd id="connection"></dd></div></dl>
@@ -60,33 +59,32 @@
               <p id="connection-hint" class="action-hint"></p>
             </div>
             <div id="feeder-detail" hidden>
-              <dl class="readings"><div><dt>Capacity on repair</dt><dd id="feeder-capacity"></dd></div><div><dt>Travel from depot</dt><dd>01:00</dd></div><div><dt>On-site repair</dt><dd id="repair-duration"></dd></div></dl>
+              <dl class="readings"><div><dt>Capacity on repair</dt><dd id="feeder-capacity"></dd></div><div><dt>Travel from depot</dt><dd>1h 00m</dd></div><div><dt>On-site repair</dt><dd id="repair-duration"></dd></div></dl>
               <div class="dispatch-actions"><button id="dispatch-1" class="primary-action">Dispatch Crew 1</button><button id="dispatch-2">Dispatch Crew 2</button></div>
               <p id="dispatch-hint" class="action-hint"></p>
             </div>
             <section class="dependencies" aria-label="Shared network"><span class="eyebrow">SHARED SUPPLY / PARALLEL FEEDERS</span><div class="dependency-actions"><button id="inspect-a">Feeder A <span id="a-state">Faulted</span></button><button id="inspect-b">Feeder B <span id="b-state">Faulted</span></button></div><p>Either feeder can supply every service. Repair adds capacity, not automatic connections.</p></section>
           </div>
           <section class="crew-section" aria-labelledby="crews-title"><div class="section-heading"><h3 id="crews-title" class="eyebrow">REPAIR CREWS</h3><span id="crew-availability">2 available</span></div><div id="crews"></div></section>
+          <section class="events-section" aria-labelledby="events-title"><div class="section-heading"><h3 id="events-title" class="eyebrow">EVENT LOG</h3><span id="history-context">Actual events through 19:30</span></div><ol id="events" class="events"></ol></section>
           </div>
           <p id="feedback" class="feedback" role="status" aria-live="polite" aria-atomic="true">Start by inspecting a feeder and dispatching a crew.</p>
           <section id="summary" aria-labelledby="summary-title" hidden></section>
         </aside>
       </main>
-      <section class="timeline" aria-label="Time controls and recorded history">
+      <section class="timeline" aria-label="Time controls">
         <div class="transport">
           <div class="playback-buttons"><button id="play" class="play-button">Start time</button><button id="next-event" title="Advance exactly to the next crew or backup transition">Next event</button></div>
-          <label class="speed-control" for="speed">Sim speed<select id="speed"><option value="1">1 sec / sec</option><option value="10" selected>10 sec / sec</option><option value="30">30 sec / sec</option></select></label>
-          <span class="keys-hint">Keys: Space · N · R · 1–9</span>
+          <label class="speed-control" for="speed">Sim speed<select id="speed"><option value="1">Slow</option><option value="10" selected>Normal</option><option value="30">Fast</option></select></label>
+          <span class="keys-hint">Keys: Space · N · R · M · 1–9</span>
           <button id="replay">Review replay</button><button id="return-live" hidden>Return to live</button>
-          <div class="replay-scrub"><label for="cursor" id="cursor-label">LIVE RUN</label><input id="cursor" type="range" min="0" max="0" value="0" step="1" disabled /><output id="cursor-time" for="cursor">00:00 / 00:00</output></div>
+          <div class="replay-scrub"><label for="cursor" id="cursor-label">LIVE RUN</label><input id="cursor" type="range" min="0" max="0" value="0" step="1" disabled /><output id="cursor-time" for="cursor">19:30 / 19:30</output></div>
         </div>
-        <div class="history-heading"><span class="eyebrow">RECORDED EVENTS</span><span id="history-context">Actual events through 00:00</span></div>
-        <ol id="events" class="events"></ol>
       </section>
-      <footer class="footer"><p>Fictional game units. Not electrical engineering or emergency advice.</p><details id="diagnostics"><summary>Blockout diagnostics</summary><p id="metrics">Collecting runtime frame samples.</p><p><button id="step" title="Advance one simulated second while paused">+1 second</button> Keyboard: Space play/pause · N next event · R replay · 1–9 select node · Escape closes panels.</p><p>No saves, shared URLs, audio or analytics. Restart clears this run. Reduced motion follows your system preference.</p></details><span class="eyebrow">FIRST PLAYABLE · V0.1</span></footer>
+      <footer class="footer"><p>Fictional game units. Not electrical engineering or emergency advice.</p><details id="diagnostics"><summary>Diagnostics</summary><p>Simulation time <time id="time" aria-label="Simulation time">00:00</time></p><p id="metrics">Collecting runtime frame samples.</p><p><button id="step" title="Advance one simulated second while paused">+1 second</button> Keyboard: Space play/pause · N next event · R replay · M sound · 1–9 select node · Escape closes panels.</p><p>No saves, shared URLs or analytics. Restart clears this run. Reduced motion follows your system preference.</p></details></footer>
     </div>
-    <dialog id="briefing" aria-labelledby="briefing-title"><h2 id="briefing-title">Storm 01</h2><ol class="briefing-beats"><li>A storm has knocked out the coastal district.</li><li>Both feeders are down. The clinic is on six minutes of backup.</li><li>You have two crews. Choose what comes back first.</li></ol><div class="dialog-actions"><button id="skip-briefing">Skip</button><button id="begin" class="primary-action" autofocus>Begin</button></div></dialog>
-    <dialog id="restart-dialog" aria-labelledby="restart-title"><h2 id="restart-title">Restart Storm 01?</h2><p>This clears the current in-memory run and its replay. There are no saved runs in this blockout.</p><div class="dialog-actions"><button id="cancel-restart" autofocus>Keep this run</button><button id="confirm-restart" class="primary-action">Clear run and restart</button></div></dialog>
+    <dialog id="briefing" aria-labelledby="briefing-title"><h2 id="briefing-title">Storm 01 — After the storm</h2><ol class="briefing-beats"><li>19:30. A storm has knocked out both feeders into the harbor district. Every building is dark.</li><li>The clinic is on its generator — 6 hours of fuel, until about 01:30. Nothing else has backup.</li><li>Two crews wait at the depot. Feeder A is the quick fix (3h, 6 of the 13 units the district needs). Feeder B is slow (7h, the other 7).</li><li>When power returns there won't be enough for everyone. You decide who gets it first.</li></ol><div class="dialog-actions"><button id="skip-briefing">Skip</button><button id="begin" class="primary-action" autofocus>Begin</button></div></dialog>
+    <dialog id="restart-dialog" aria-labelledby="restart-title"><h2 id="restart-title">Restart Storm 01?</h2><p>This clears the current in-memory run and its replay. There are no saved runs.</p><div class="dialog-actions"><button id="cancel-restart" autofocus>Keep this run</button><button id="confirm-restart" class="primary-action">Clear run and restart</button></div></dialog>
     <noscript><p>AFTERLIGHT requires JavaScript for its local simulation. No account or API key is needed.</p></noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>

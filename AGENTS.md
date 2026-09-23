@@ -4,7 +4,7 @@ Read README.md, DESIGN.md, HANDOFF.md and specs/ before work. specs/ is the sour
 
 ## First-playable authority
 
-Mark explicitly authorized the build on September 21, 2026 after the 18:00 UTC kickoff. Implement only the Storm 01 first playable defined in specs/first-playable/: deterministic simulation, simple coastal blockout, keyboard controls, pause and read-only replay. Stop for Mark's review before detailed art, extra incidents, branching/comparison UI or persistence. No commits, publication or deployment without his review. Build window ends September 25 at 18:00 UTC (2 PM Eastern). Event rules were reverified at kickoff.
+Mark explicitly authorized the build on September 21, 2026 after the 18:00 UTC kickoff. He has since approved the guided flow, realism/day-night, vehicle, clarity, sound and art passes, and (September 24) Storms 02/03 with a comparison summary — see specs/roadmap.md. Persistence/share remain unapproved. Local commits approved September 23; publication, pushing and deployment still require his review. Build window ends September 25 at 18:00 UTC (2 PM Eastern). Event rules were reverified at kickoff.
 Pre-build images are design references, not implemented UI or eligible runtime assets. Verify eligibility before any reuse in the submission.
 Do not spawn agents without explaining scope/cost and obtaining approval.
 

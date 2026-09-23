@@ -74,7 +74,7 @@ test('initial state, working WebGL and no external runtime requests', async ({ p
   await expect(page.locator('#mode')).toHaveText('PAUSED');
   await expect(page.locator('#world-time')).toContainText('19:30');
   await expect(page.locator('#task-banner')).toContainText('broken feeder');
-  await expect(page.locator('#backup')).toHaveText('06:00');
+  await expect(page.locator('#backup')).toHaveText('6h 00m');
   await expect(page.locator('#capacity')).toHaveText('0');
   await expect(page.locator('#render-notice')).toBeHidden();
   await expect(page.locator('canvas')).toBeVisible();
@@ -116,11 +116,11 @@ for (const priority of ['clinic', 'housing']) {
     await expect(page.locator('#load')).toHaveText('6');
     for (const id of priority === 'clinic' ? ['housing-a', 'housing-b', 'beacon'] : ['clinic', 'pump', 'beacon']) await reconnect(page, id);
     await expect(page.locator('#load')).toHaveText('13');
-    await expect(downtime(page, 'clinic')).toHaveText(priority === 'clinic' ? 'Out 00:00' : 'Out 02:00');
-    await expect(downtime(page, 'housing-a')).toHaveText(priority === 'clinic' ? 'Out 08:00' : 'Out 04:00');
-    await expect(downtime(page, 'housing-b')).toHaveText(priority === 'clinic' ? 'Out 08:00' : 'Out 04:00');
-    await expect(downtime(page, 'pump')).toHaveText(priority === 'clinic' ? 'Out 04:00' : 'Out 08:00');
-    await expect(downtime(page, 'beacon')).toHaveText('Out 08:00');
+    await expect(downtime(page, 'clinic')).toHaveText(priority === 'clinic' ? 'Out 0h 00m' : 'Out 2h 00m');
+    await expect(downtime(page, 'housing-a')).toHaveText(priority === 'clinic' ? 'Out 8h 00m' : 'Out 4h 00m');
+    await expect(downtime(page, 'housing-b')).toHaveText(priority === 'clinic' ? 'Out 8h 00m' : 'Out 4h 00m');
+    await expect(downtime(page, 'pump')).toHaveText(priority === 'clinic' ? 'Out 4h 00m' : 'Out 8h 00m');
+    await expect(downtime(page, 'beacon')).toHaveText('Out 8h 00m');
     await expect(page.locator('[data-state="grid"]')).toHaveCount(5);
     await expect(page.locator('#summary')).toBeVisible();
     await page.screenshot({ path: info.outputPath(`${priority}-restored.png`), fullPage: true });
@@ -145,7 +145,7 @@ test('capacity failures are feedback, never history; disconnect reallocates expl
   await page.locator('#connection-action').click();
   await expect(page.locator('#load')).toHaveText('2');
   await expect(page.locator('#node-status')).toHaveText('Backup power');
-  await expect(page.locator('#backup')).toHaveText('02:00');
+  await expect(page.locator('#backup')).toHaveText('2h 00m');
   await expect(page.locator('[data-service="housing-a"] .service-state')).toHaveText('Offline');
   await reconnect(page, 'housing-a');
   await expect(page.locator('#load')).toHaveText('5');
@@ -198,24 +198,24 @@ test('auto-pause at repair completions and restored run summary', async ({ page 
   await ensureRunning(page);
   await expect(page.locator('#time')).toHaveText('04:00', { timeout: 20000 });
   await expect(page.locator('#mode')).toHaveText('PAUSED');
-  await expect(page.locator('#decision')).toContainText('6 CU');
+  await expect(page.locator('#decision')).toContainText('6 units online');
   await reconnectPopover(page, 'clinic');
   await reconnectPopover(page, 'pump');
   await expect(page.locator('#load')).toHaveText('6');
   await page.locator('#resume').click();
   await expect(page.locator('#time')).toHaveText('08:00', { timeout: 20000 });
   await expect(page.locator('#mode')).toHaveText('PAUSED');
-  await expect(page.locator('#decision')).toContainText('13 CU');
+  await expect(page.locator('#decision')).toContainText('13 units online');
   for (const id of ['housing-a', 'housing-b', 'beacon']) await reconnectPopover(page, id);
   await expect(page.locator('#summary')).toBeVisible();
   await expect(page.locator('#decision')).toContainText('All services restored');
   await expect(page.locator('#resume')).toHaveText('View summary');
-  await expect(summaryDowntime(page, 'clinic')).toHaveText('00:00');
-  await expect(summaryDowntime(page, 'housing-a')).toHaveText('08:00');
-  await expect(summaryDowntime(page, 'housing-b')).toHaveText('08:00');
-  await expect(summaryDowntime(page, 'pump')).toHaveText('04:00');
-  await expect(summaryDowntime(page, 'beacon')).toHaveText('08:00');
-  await expect(page.locator('#summary')).toContainText('backup remaining 02:00');
+  await expect(summaryDowntime(page, 'clinic')).toHaveText('0h 00m');
+  await expect(summaryDowntime(page, 'housing-a')).toHaveText('8h 00m');
+  await expect(summaryDowntime(page, 'housing-b')).toHaveText('8h 00m');
+  await expect(summaryDowntime(page, 'pump')).toHaveText('4h 00m');
+  await expect(summaryDowntime(page, 'beacon')).toHaveText('8h 00m');
+  await expect(page.locator('#summary')).toContainText('backup remaining 2h 00m');
 });
 
 test('clinic backup warning and expiry auto-pause on a housing-first run', async ({ page }) => {
@@ -232,14 +232,14 @@ test('clinic backup warning and expiry auto-pause on a housing-first run', async
   await page.locator('#resume').click();
   await expect(page.locator('#time')).toHaveText('05:00', { timeout: 20000 });
   await expect(page.locator('#mode')).toHaveText('PAUSED');
-  await expect(page.locator('#decision')).toContainText('backup');
+  await expect(page.locator('#decision')).toContainText('fuel left');
   await page.locator('#resume').click();
   await expect(page.locator('#time')).toHaveText('06:00', { timeout: 20000 });
   await expect(page.locator('#mode')).toHaveText('PAUSED');
-  await expect(page.locator('#decision')).toContainText('backup');
+  await expect(page.locator('#decision')).toContainText('gone dark');
   await page.locator('#resume').click();
   await expect(page.locator('#time')).toHaveText('08:00', { timeout: 20000 });
-  await expect(page.locator('#decision')).toContainText('13 CU');
+  await expect(page.locator('#decision')).toContainText('13 units online');
 });
 
 test('try a different order resets without a dialog and compares session runs', async ({ page }) => {
@@ -295,12 +295,16 @@ test('keyboard shortcuts: space toggles time, digits select, Escape closes the p
   await page.keyboard.press('Escape');
 });
 
-test('guidance slot sits above the scene and never covers markers', async ({ page }) => {
+test('guidance overlay sits inside the top of the scene', async ({ page }) => {
   test.setTimeout(60000);
   const scene = await page.locator('#scene').boundingBox();
   const banner = await page.locator('#task-banner').boundingBox();
   expect(banner).not.toBeNull();
-  expect(banner!.y + banner!.height).toBeLessThanOrEqual(scene!.y);
+  expect(banner!.y).toBeGreaterThanOrEqual(scene!.y - 1);
+  expect(banner!.y + banner!.height).toBeLessThanOrEqual(scene!.y + 80);
+  const capacityOverlay = await page.locator('.capacity-overlay').boundingBox();
+  expect(capacityOverlay!.y).toBeGreaterThanOrEqual(scene!.y - 1);
+  expect(capacityOverlay!.x + capacityOverlay!.width).toBeGreaterThanOrEqual(scene!.x + scene!.width - 24);
   await page.locator('#speed').selectOption('30');
   await sendCrew(page, 'feeder-a', 'crew-1');
   await sendCrew(page, 'feeder-b', 'crew-2');
@@ -309,7 +313,8 @@ test('guidance slot sits above the scene and never covers markers', async ({ pag
   await expect(page.locator('#mode')).toHaveText('PAUSED');
   const sceneAfter = await page.locator('#scene').boundingBox();
   const decision = await page.locator('#decision').boundingBox();
-  expect(decision!.y + decision!.height).toBeLessThanOrEqual(sceneAfter!.y);
+  expect(decision!.y).toBeGreaterThanOrEqual(sceneAfter!.y - 1);
+  expect(decision!.y + decision!.height).toBeLessThanOrEqual(sceneAfter!.y + 140);
   await expect(page.locator('#task-banner')).toBeHidden();
 });
 
@@ -388,7 +393,7 @@ test('restart cancel and Escape preserve the run; confirmation resets it', async
   await page.locator('#confirm-restart').click();
   await expect(page.locator('#time')).toHaveText('00:00');
   await expect(page.locator('#events li')).toHaveCount(1);
-  await expect(page.locator('#backup')).toHaveText('06:00');
+  await expect(page.locator('#backup')).toHaveText('6h 00m');
 });
 
 test('keyboard-only full restoration using native buttons preserves focus across updates', async ({ page }) => {
@@ -503,4 +508,73 @@ test('reduced motion completes the incident with no decorative animation', async
   await expect(page.locator('#load')).toHaveText('13');
   await expect(page.locator('#summary')).toBeVisible();
   expect(await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running').length)).toBe(0);
+});
+
+test('desktop clarity: scene fills most of the viewport and the header stays compact', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const scene = await page.locator('#scene').boundingBox();
+  expect(scene!.height).toBeGreaterThanOrEqual(0.6 * 900);
+  const header = await page.locator('.masthead').boundingBox();
+  expect(header!.height).toBeLessThanOrEqual(56);
+  const strip = await page.locator('#service-strip').boundingBox();
+  expect(strip!.height).toBeLessThanOrEqual(56);
+  const transport = await page.locator('.transport').boundingBox();
+  expect(transport!.height).toBeLessThanOrEqual(56);
+});
+
+test('mobile clarity: world time stays visible with no horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('#world-time')).toBeVisible();
+  await expect(page.locator('#world-time')).toContainText('19:30');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  const scene = await page.locator('#scene').boundingBox();
+  expect(scene!.height).toBeGreaterThanOrEqual(0.45 * 844);
+});
+
+test('briefing states the stakes and the generator deadline', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#briefing')).toBeVisible();
+  await expect(page.locator('#briefing')).toContainText('until about 01:30');
+  await expect(page.locator('#briefing')).toContainText('Storm 01 — After the storm');
+});
+
+test('parallel dispatch decision quotes real ETAs and the header hides sim time', async ({ page }) => {
+  test.setTimeout(60000);
+  await dispatchBoth(page);
+  expect(await page.locator('#task-banner').textContent()).not.toMatch(/\b\d\d:\d\d \(estimates?\)/);
+  await expect(page.locator('.masthead time')).toHaveCount(1);
+  await expect(page.locator('#time')).toBeHidden();
+  await next(page, '01:00');
+  await next(page, '04:00');
+  await expect(page.locator('#decision')).toContainText('Feeder A is back — 6 units online');
+  await expect(page.locator('#decision')).toContainText('runs out at 01:30');
+  await expect(page.locator('#decision')).toContainText("isn't due until 03:30");
+});
+
+test('sound starts on Begin, toggles with M, and cues follow live events only', async ({ page }) => {
+  test.setTimeout(90000);
+  const cues = () => page.evaluate(() => (window as unknown as { __audio: { cues: string[] } }).__audio.cues.slice());
+  const state = () => page.evaluate(() => (window as unknown as { __audio: { state: string } }).__audio.state);
+  expect(await state()).toBe('running');
+  await expect(page.locator('#sound-toggle')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#sound-toggle')).toHaveText('Sound on');
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  await page.keyboard.press('m');
+  await expect(page.locator('#sound-toggle')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#sound-toggle')).toHaveText('Sound off');
+  await page.keyboard.press('m');
+  await expect(page.locator('#sound-toggle')).toHaveAttribute('aria-pressed', 'true');
+  await dispatchBoth(page);
+  await next(page, '01:00');
+  await next(page, '04:00');
+  await reconnect(page, 'clinic');
+  await reconnect(page, 'pump');
+  await reconnect(page, 'housing-a');
+  expect(await cues()).toContain('reconnect');
+  expect(await cues()).toContain('reject');
+  const beforeReplay = await cues();
+  await page.locator('#replay').click();
+  await page.locator('#cursor').fill('200');
+  await page.locator('#cursor').fill('60');
+  expect(await cues()).toEqual(beforeReplay);
 });
