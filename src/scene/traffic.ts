@@ -4,7 +4,7 @@ import type { FeederId } from '../scenario.ts';
 // Heading convention matches vehicles.ts: forward = (cos h, -sin h), so a route
 // segment (dx,dz) has heading -atan2(dz, dx). Truck local +x is the nose.
 export type Point = { x: number; z: number; reverse?: boolean };
-export type Pose = Point & { heading: number };
+type Pose = Point & { heading: number };
 
 // Real truck footprint from buildTruck: length 1.9, width .78 (stripe is the
 // widest body part). The yield/parking footprint adds clearance margins.
@@ -102,7 +102,7 @@ export function returnRoute(index: 0 | 1): Point[] {
 // an inbound truck holds at the door instead of blocking the yard. Only the
 // returning crew's drive reserves it — normal departures keep the corridor
 // rules.
-export function inDepotZone(p: Point): boolean {
+function inDepotZone(p: Point): boolean {
   return (Math.abs(p.x - ACCESS_X) < 1.05 && p.z > 1.2 && p.z < 7.0)
     || (p.x > -6.3 && p.x < .9 && p.z > 7.1 && p.z < 9.55);
 }
@@ -110,7 +110,7 @@ export function inDepotZone(p: Point): boolean {
 // The east junction is the other contested crossing: the returner's westbound
 // lane crosses the Feeder-B route where it turns north onto the east road.
 // Sized so a waiting truck holds a full body-length clear of the crossing.
-export function inEastJunction(p: Point): boolean {
+function inEastJunction(p: Point): boolean {
   return p.x > 7 && p.x < 9.8 && p.z > .9 && p.z < 2.9;
 }
 

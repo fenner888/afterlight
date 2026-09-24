@@ -38,7 +38,7 @@ const OFF = new THREE.Color(0x141f26);
 // One instanced quad per window across all service buildings; instanceColor drives
 // the lit look (values > 1 feed bloom at night). A second InstancedMesh carries a
 // merged sill/lintel/jamb surround per window so lit panes read as inset frames.
-export class WindowLights {
+class WindowLights {
   private mesh: THREE.InstancedMesh;
   private frames: THREE.InstancedMesh;
   private ranges = new Map<ServiceId, { start: number; count: number }>();
@@ -125,7 +125,7 @@ export class WindowLights {
   }
 }
 
-export interface DistrictBuild {
+interface DistrictBuild {
   nodes: Map<NodeId, THREE.Group>;
   windows: WindowLights;
   feederGlow: Map<FeederId, THREE.MeshStandardMaterial>;

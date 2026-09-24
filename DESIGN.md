@@ -8,10 +8,7 @@ The city is the focal point: a crafted playable object with a compact operations
 
 ## Visual references
 
-- [Storm](references/concepts/afterlight-storm.png): clinic selected on backup, crew ready to dispatch.
-- [Recovery](references/concepts/afterlight-recovery.png): same district, clinic restored, warm windows returning, a remaining feeder constraint.
-
-Generated visual references only, not application screenshots or runtime assets. Geometry/UI inconsistencies between generated images are not requirements. The real implementation must use one consistent district. Runtime lighting follows actual grid/backup/offline state; a repaired feeder does not light disconnected buildings. See [prompts](references/concepts/PROMPTS.md).
+Two pre-build mood images (a storm state and a recovery state) guided the tone during planning. They are not part of this repository, the runtime or the submission. The implementation uses one consistent district. Runtime lighting follows actual grid/backup/offline state; a repaired feeder does not light disconnected buildings.
 
 ## Composition
 

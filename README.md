@@ -73,7 +73,7 @@ Validation results and known gaps: [validation.md](specs/first-playable/validati
 
 [Design brief](DESIGN.md) · [Requirements](specs/first-playable/requirements.md) · [Roadmap](specs/roadmap.md) · [Tech stack](specs/tech-stack.md)
 
-The images in `references/concepts/` are AI-generated mood references made before the build window ([prompts](references/concepts/PROMPTS.md)). They are not screenshots or runtime assets.
+All code and every rendered asset were produced during the Yard #3 build window (September 21–25, 2026); the specs record the design decisions as they were made.
 
 ## License
 

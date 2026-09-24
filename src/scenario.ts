@@ -17,7 +17,6 @@ export const isService = (id: string): id is ServiceId => SERVICE_IDS.some(servi
 export const isFeeder = (id: string): id is FeederId => FEEDER_IDS.some(feeder => feeder === id);
 export const isCrew = (id: string): id is CrewId => CREW_IDS.some(crew => crew === id);
 export const isNode = (id: string): id is NodeId => NODE_IDS.some(node => node === id);
-export const isScenarioId = (id: string): id is ScenarioId => SCENARIO_IDS.some(scenario => scenario === id);
 
 // Shared across every storm: one 13-CU trunk, five services, identical travel times.
 export const upstreamCapacity = 13;
@@ -159,7 +158,7 @@ export const formatWorldTime = (tick: number, start: number): string => {
   return `${Math.floor(minutes / 60).toString().padStart(2, '0')}:${Math.floor(minutes % 60).toString().padStart(2, '0')}`;
 };
 
-export type DayPhase = 'day' | 'dusk' | 'night' | 'dawn';
+type DayPhase = 'day' | 'dusk' | 'night' | 'dawn';
 
 export const dayPhase = (tick: number, start: number): DayPhase => {
   const minutes = ((worldMinutes(tick, start) % 1440) + 1440) % 1440;

@@ -16,7 +16,7 @@ const hash2 = (x: number, y: number, seed: number): number => {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 };
 const smooth = (t: number): number => t * t * (3 - 2 * t);
-export const fbm = (size: number, seed: number, { octaves = 5, base = 6, gain = .5, lacunarity = 2 } = {}): Float32Array => {
+const fbm = (size: number, seed: number, { octaves = 5, base = 6, gain = .5, lacunarity = 2 } = {}): Float32Array => {
   const out = new Float32Array(size * size);
   let amp = 1, total = 0, L = base;
   for (let o = 0; o < octaves; o++) {

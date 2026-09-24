@@ -1,6 +1,6 @@
 # AFTERLIGHT — project rules
 
-Read README.md, DESIGN.md, HANDOFF.md and specs/ before work. specs/ is the source of truth. Full gates: /Users/frank/hermes/projects/ship-safe-framework.md.
+Read README.md, DESIGN.md and specs/ before work. specs/ is the source of truth.
 
 ## First-playable authority
 

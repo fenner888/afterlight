@@ -3,10 +3,10 @@ import type { CrewId, FeederId, ServiceId, NodeId, ScenarioId, ScenarioConfig } 
 
 export type Action = { type: 'dispatch'; crew: CrewId; target: FeederId } | { type: 'reconnect' | 'disconnect'; target: ServiceId };
 export type Command = Action & { tick: number; sequence: number };
-export type EventKind = 'incident' | 'dispatched' | 'arrived' | 'repaired' | 'reconnected' | 'disconnected' | 'backup-expired' | 'returned';
+type EventKind = 'incident' | 'dispatched' | 'arrived' | 'repaired' | 'reconnected' | 'disconnected' | 'backup-expired' | 'returned';
 export type DomainEvent = { id: number; tick: number; kind: EventKind; node: NodeId; text: string };
-export type ServiceState = { connected: boolean; backupRemaining: number; backupUsed: number; downtime: number };
-export type CrewState = { phase: 'idle' | 'traveling' | 'repairing' | 'away'; location: 'depot' | FeederId; origin: 'depot' | FeederId; target: FeederId | null; departedAt: number; arriveAt: number; completeAt: number; returnAt: number };
+type ServiceState = { connected: boolean; backupRemaining: number; backupUsed: number; downtime: number };
+type CrewState = { phase: 'idle' | 'traveling' | 'repairing' | 'away'; location: 'depot' | FeederId; origin: 'depot' | FeederId; target: FeederId | null; departedAt: number; arriveAt: number; completeAt: number; returnAt: number };
 export type State = {
   scenario: ScenarioId; version: number; seed: number; tick: number;
   services: Record<ServiceId, ServiceState>;
@@ -15,7 +15,7 @@ export type State = {
   commands: Command[];
   events: DomainEvent[];
 };
-export type Result = { ok: boolean; state: State; message: string };
+type Result = { ok: boolean; state: State; message: string };
 
 const configOf = (state: State): ScenarioConfig => SCENARIOS[state.scenario];
 
@@ -39,7 +39,7 @@ export function initialState(id: ScenarioId = 'storm-01'): State {
 export const capacity = (state: State): number => Math.min(upstreamCapacity, FEEDER_IDS.reduce((sum, id) => sum + (state.feeders[id] === 'repaired' ? configOf(state).feeders[id].capacity : 0), 0));
 export const connectedLoad = (state: State): number => SERVICE_IDS.reduce((sum, id) => sum + (state.services[id].connected ? SERVICES[id].load : 0), 0);
 export const serviceStatus = (state: State, id: ServiceId): 'grid' | 'backup' | 'offline' => state.services[id].connected ? 'grid' : state.services[id].backupRemaining > 0 ? 'backup' : 'offline';
-export type Phase = 'dispatch' | 'restore' | 'restored';
+type Phase = 'dispatch' | 'restore' | 'restored';
 export const phase = (state: State): Phase =>
   SERVICE_IDS.every(id => state.services[id].connected) ? 'restored'
     : capacity(state) === 0 && CREW_IDS.some(id => state.crews[id].phase === 'idle') && FEEDER_IDS.some(id => state.feeders[id] === 'faulted') ? 'dispatch'
