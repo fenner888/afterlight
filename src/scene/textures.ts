@@ -417,6 +417,24 @@ export function moonSprite(ctx: SceneContext): THREE.CanvasTexture {
   return texture;
 }
 
+// Warm sunrise disc: saturated amber core with a hard edge so it reads as the
+// sun against a pale dawn sky, plus a short golden falloff.
+export function sunSprite(ctx: SceneContext): THREE.CanvasTexture {
+  const { el, g } = canvas(128);
+  const grad = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(255,226,158,1)');
+  grad.addColorStop(.34, 'rgba(255,190,96,1)');
+  grad.addColorStop(.46, 'rgba(255,158,62,.95)');
+  grad.addColorStop(.55, 'rgba(252,140,52,.4)');
+  grad.addColorStop(1, 'rgba(255,140,50,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(el);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  ctx.track(texture);
+  return texture;
+}
+
 export function rainStreak(ctx: SceneContext): THREE.CanvasTexture {
   const el = document.createElement('canvas');
   el.width = 8;

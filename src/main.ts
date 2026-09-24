@@ -227,7 +227,7 @@ function updatePopover(): void {
   }
 }
 
-const narrowScene = matchMedia('(max-width: 719px)');
+const narrowScene = matchMedia('(max-width: 600px)');
 
 function positionPopover(): void {
   if (!popoverNode) return;

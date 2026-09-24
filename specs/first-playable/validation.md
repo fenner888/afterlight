@@ -49,4 +49,14 @@ Environment: Mac mini, Apple M4, 16 GB RAM; macOS 25.6; Node 26.7.0, npm 11.19.0
 - Preliminary runtime sample during active crew travel, 1440×900, DPR 1: 291 visible frames, p50 16.7 ms, p95 16.7 ms, longest 66.8 ms; renderer reports 382 draw calls and 6,388 triangles. This short headless sample is not a production performance claim. Diagnostics report rolling samples in the running UI.
 - `npm audit`: zero known vulnerabilities. Direct package registry metadata, licenses, repositories, publication age and weekly download history were checked before installing; install scripts were disabled and transitive resolution used the September 14 cutoff. Source inspection found no runtime network calls, HTML string rendering, eval, storage APIs or embedded secrets. Strict unused-symbol checks pass; this is not a complete release security/license/dead-code audit.
 
-Not implemented/not applicable here: imports, persisted saves, challenge URLs, branching/comparison UI, other incidents, upstream-loss incidents, sound, accounts or backend auth. Safari, Firefox, actual phone GPUs, assistive technology, exhaustive contrast testing and the full release gates remain unverified. Human review is the next gate, not more automatic implementation.
+Not implemented/not applicable here: imports, persisted saves, challenge URLs, branching/comparison UI, other incidents, upstream-loss incidents, sound, accounts or backend auth. Safari, Firefox, actual phone GPUs, assistive technology, exhaustive contrast testing and the full release gates remain unverified as of this date. Human review is the next gate, not more automatic implementation.
+
+## September 24 cross-browser smoke evidence
+
+Playwright 1.63.0 projects `webkit` and `firefox` (browser binaries installed via `npx playwright install webkit firefox`; no npm dependencies added) run the `@smoke` subset via `npm run test:cross`. Default `npm run test:browser` remains installed-Chrome only.
+
+- `npm run test:cross`: **8/8 pass** (4 webkit, 4 firefox) — picker/Begin/live header, dispatch both crews and reconnect the clinic, WebGL-render-or-fallback, and keyboard selection/time.
+- WebGL verified real, not the HTML fallback, in each engine by inspecting the live canvas context on the dev server: WebKit reports renderer "Apple GPU"; Firefox reports "Apple M1, or similar" (Apple Silicon hosts, headless).
+- Smoke coverage is deliberately narrow: it proves the app boots, simulates, renders and takes keyboard input on each engine. It does not re-run the 43-test functional suite per engine; visual/performance parity beyond canvas presence is unchecked.
+
+Still untested: real iOS Safari and real Android devices, assistive technology/screen readers, native select behavior, real touch input, exhaustive contrast checks, per-engine performance, and the full release audit. Human review remains the next gate.

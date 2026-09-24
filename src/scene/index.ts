@@ -399,7 +399,8 @@ export class DistrictScene {
     }));
     this.lights.update(statusOf, crewActive, this.sky.nightness);
     const worldStart = SCENARIOS[state.scenario].worldStart;
-    this.sky.update(state.tick, connectedLoad(state), current, dayPhase(state.tick, worldStart), now, dt, worldStart);
+    const day = dayPhase(state.tick, worldStart);
+    this.sky.update(state.tick, connectedLoad(state), current, day, now, dt, worldStart);
     this.sea.update(now, dt, this.sky.nightness);
     // Distant-shore windows glow only at night — sparse and dim, never by day.
     const shoreWindows = this.district.shoreWindows;
@@ -428,7 +429,9 @@ export class DistrictScene {
     this.district.beaconPivot.visible = beaconOn;
     if (beaconOn && !reduced) this.district.beaconPivot.rotation.y = now * .5;
     if (this.rain && this.rainPositions && this.rainMaterial) {
-      const density = (1 - .78 * connectedLoad(state) / 13) * (.45 + .55 * this.sky.nightness);
+      // Rain stops entirely once the storm clears: full restoration + daylight.
+      const cleared = day !== 'night' && connectedLoad(state) >= 13;
+      const density = cleared ? 0 : (1 - .78 * connectedLoad(state) / 13) * (.45 + .55 * this.sky.nightness);
       this.rainLevel = density;
       this.rain.geometry.setDrawRange(0, Math.floor(1500 * density));
       this.rainMaterial.opacity = .3 + .25 * this.sky.nightness;

@@ -878,3 +878,38 @@ test('switching storms mid-run confirms; cancel preserves the run', async ({ pag
   await expect(page.locator('#world-time')).toHaveText('DAY · 16:30');
   await expect(page.locator('#events li')).toHaveCount(1);
 });
+
+// Cross-browser smoke subset — engine-agnostic paths only (inspector, keyboard,
+// HTML UI), so they pass whether headless WebGL is available or not.
+test('@smoke picker, Begin and the live header', async ({ page }) => {
+  await expect(page.locator('#incident-number')).toHaveText('INCIDENT 01');
+  await expect(page.locator('#world-time')).toContainText('19:30');
+  await expect(page.locator('#service-strip')).toBeVisible();
+});
+
+test('@smoke dispatch both crews and reconnect the clinic', async ({ page }) => {
+  await dispatchBothInspector(page);
+  await next(page, '01:00');
+  await advanceTo(page, 240);
+  await reconnect(page, 'clinic');
+  await expect(page.locator('#load')).toHaveText('4');
+  await expect(page.locator('#node-status')).toHaveText('Grid powered');
+});
+
+test('@smoke WebGL renders or the HTML fallback stays usable', async ({ page }) => {
+  const canvas = page.locator('canvas');
+  if (await canvas.count() > 0) await expect(canvas).toBeVisible();
+  else await expect(page.locator('#render-notice')).toContainText('3D view unavailable');
+});
+
+test('@smoke keyboard flow drives selection and time', async ({ page }) => {
+  await page.keyboard.press('6');
+  await expect(page.locator('#inspector-title')).toHaveText('Feeder A');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#node-actions')).toBeHidden();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Space');
+  await expect(page.locator('#mode')).toHaveText('RUNNING');
+  await page.keyboard.press('Space');
+  await expect(page.locator('#mode')).toHaveText('PAUSED');
+});

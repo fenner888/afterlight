@@ -169,6 +169,19 @@ Numbers and copy: [incidents.md](incidents.md).
 - **Run comparison.** Completed runs are kept in memory per storm for the session (no persistence): the latest three. The summary shows them as columns (Run 1/2/3) with per-service downtime, fully-restored world time and reconnection order. No score, no winner highlight, no colour-only difference. "Try a different order" restarts the same storm. The summary also offers "Try another storm", which opens the picker.
 - **Audio.** Crew return plays the `decision` cue. No new cues.
 
+### Release polish (September 24)
+
+- **Sunrise payoff.** After full restoration, the 06:30 dawn frame must read as a clear early morning, not a dim night:
+  - Sky visibly brighter than night, with a warm horizon glow.
+  - Sun disc visible above the distant shoreline.
+  - Clouds at 25% coverage or less.
+  - Rain off.
+  - Exposure ramps up smoothly over the "Watch the sun come up" run.
+  - Storm 02's 16:30 daylight still reads as an overcast squall while the district is unrestored.
+  - Night looks are unchanged.
+- **Phone action card.** At a viewport width of 600 px or less, the node popover docks as a bottom sheet inside the scene: full scene width, pinned to the scene's bottom edge, with the same content and focus behaviour. It never covers the service strip or transport row, and the scene is not reflowed.
+- **Cross-browser.** The Playwright config gains `webkit` and `firefox` projects, and `npm run test:browser` stays Chrome-only by default. Tag a smoke subset `@smoke`: picker and Begin, dispatch both crews, a reconnect, the WebGL-or-fallback check, and the keyboard flow. `npm run test:cross` runs that subset on WebKit and Firefox. If WebGL is unavailable in a headless engine, the HTML fallback must still complete the smoke flow. Record the results and remaining gaps in validation.md.
+
 ### Art (buildings, trees, quay, boat, cars)
 
 - Buildings: parapet/cornice caps, stepped massing, framed windows (inset with sill and lintel, instanced), ground-floor entrances with doors and awnings/canopies, drainpipes, rooftop clutter (HVAC boxes, vents, water tank on housing, antenna). Clinic: entrance canopy with a lit cross sign and a visible generator unit with exhaust stack. Pumping station: pipework and a tank. Lighthouse: gallery railing and glazed lantern room. A distant fog-faded shoreline with a few lit windows across the water (decoration, not nodes), which also softens the horizon band.

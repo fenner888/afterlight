@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { worldMinutes } from '../scenario.ts';
-import { cloudAlpha, moonSprite, nightEquirect } from './textures.ts';
+import { cloudAlpha, moonSprite, nightEquirect, sunSprite } from './textures.ts';
 import type { SceneContext } from './common.ts';
 
 const EXPOSURE: Record<string, number> = { dusk: 1.2, night: 2.7, dawn: 1.2, day: 1.25 };
@@ -53,6 +53,7 @@ export class SkyRig {
   private stars: THREE.Points;
   private starMaterial: THREE.PointsMaterial;
   private moonSprite: THREE.Sprite;
+  private sunSprite: THREE.Sprite;
   private clouds: { mesh: THREE.Mesh; material: THREE.MeshStandardMaterial; map: THREE.CanvasTexture; base: number; speed: number }[] = [];
   private fog = new THREE.Color(0x0e1820);
   private flashUntil = 0;
@@ -104,6 +105,12 @@ export class SkyRig {
     this.moonSprite.position.copy(this.moonDir).multiplyScalar(135);
     this.moonSprite.scale.setScalar(22);
     world.add(this.moonSprite);
+    const sunSpriteMaterial = new THREE.SpriteMaterial({ map: sunSprite(ctx), transparent: true, opacity: 0, depthWrite: false, fog: false });
+    ctx.track(sunSpriteMaterial);
+    this.sunSprite = new THREE.Sprite(sunSpriteMaterial);
+    // Past the shore ridge (~195) so the silhouette occludes it naturally.
+    this.sunSprite.scale.setScalar(20);
+    world.add(this.sunSprite);
     const cloudTexture = cloudAlpha(ctx);
     for (const [index, size, height, base, speed] of [[0, 150, 58, .42, .0004], [1, 210, 74, .27, .00022]] as const) {
       const map = index === 0 ? cloudTexture : ctx.track(cloudTexture.clone());
@@ -153,13 +160,26 @@ export class SkyRig {
     const elevation = solarElevation(elapsed);
     // The sun sweeps west->east under the horizon overnight (280 -> 80) then
     // continues through the day to the next sunset (80 -> 280 over 13h).
-    const azimuth = THREE.MathUtils.degToRad(elapsed <= 660 ? 280 + elapsed / 660 * 160 : 440 + (elapsed - 660) / 780 * 200);
+    const baseAzimuth = elapsed <= 660 ? 280 + elapsed / 660 * 160 : 440 + (elapsed - 660) / 780 * 200;
+    // Sunrise payoff: through the dawn window (05:30-11:30 world) swing the low
+    // sun over the far shoreline (-z, azimuth ~180) then back onto the day
+    // track, so the 06:30 disc hangs above the shore without moving the squall.
+    const dawnWeight = THREE.MathUtils.smoothstep(elapsed, 570, 660) * (1 - THREE.MathUtils.smoothstep(elapsed, 760, 960));
+    const shoreDelta = ((180 - (baseAzimuth % 360)) + 540) % 360 - 180;
+    const azimuth = THREE.MathUtils.degToRad(baseAzimuth + shoreDelta * dawnWeight);
     const polar = THREE.MathUtils.degToRad(90 - elevation);
     this.sunDir.setFromSphericalCoords(1, polar, azimuth);
     const k = load / 13;
     const uniforms = this.sky.material.uniforms;
     uniforms['sunPosition']!.value.copy(this.sunDir);
-    const params = SKY_PARAMS[day] ?? SKY_PARAMS['night']!;
+    const params = { ...(SKY_PARAMS[day] ?? SKY_PARAMS['night']!) };
+    // Restoration clears the storm: restored dawn/day read brighter and
+    // clearer, while an unrestored day keeps the overcast squall.
+    if (day === 'dawn' || day === 'day') {
+      params.turbidity -= (day === 'dawn' ? 2 : 1) * k;
+      params.rayleigh += (day === 'dawn' ? .8 : 1.1) * k;
+      params.mie += (day === 'dawn' ? .002 : 0) * k;
+    }
     const ease = reducedMotion ? 1 : Math.min(1, dt * 1.4);
     this.skyParams.turbidity += (params.turbidity - this.skyParams.turbidity) * ease;
     this.skyParams.rayleigh += (params.rayleigh - this.skyParams.rayleigh) * ease;
@@ -170,7 +190,7 @@ export class SkyRig {
     const nightTarget = THREE.MathUtils.clamp((-elevation - 2) / 8, 0, 1);
     this.nightness += (nightTarget - this.nightness) * ease;
     const n = this.nightness;
-    const exposureTarget = EXPOSURE[day] ?? 1;
+    const exposureTarget = (EXPOSURE[day] ?? 1) + (day === 'dawn' || day === 'day' ? .1 * k : 0);
     this.exposure += (exposureTarget - this.exposure) * (reducedMotion ? 1 : Math.min(1, dt * 1.6));
     renderer.toneMappingExposure = this.exposure;
     const sunVisible = THREE.MathUtils.smoothstep(elevation, -6, 3);
@@ -181,7 +201,9 @@ export class SkyRig {
     this.sun.castShadow = this.sun.intensity > .05;
     this.moon.intensity = n * 1.6;
     this.moon.castShadow = n > .5;
-    this.hemi.intensity = 2.2 - 1.1 * n;
+    // Clear skies after restoration: less flat ambient, more sun contrast.
+    const clearedDay = (day === 'dawn' || day === 'day') ? k : 0;
+    this.hemi.intensity = (2.2 - 1.1 * n) * (1 - .25 * clearedDay);
     this.hemi.color.setHex(0xc6dce9).lerp(new THREE.Color(0x2e4a6b), n);
     this.hemi.groundColor.setHex(0x405047).lerp(new THREE.Color(0x141a20), n);
     const bucket = Math.floor(minutes / 20);
@@ -198,7 +220,7 @@ export class SkyRig {
     } else if (!wantNightEnv && this.envTarget) {
       world.environment = this.envTarget.texture;
     }
-    world.environmentIntensity = 1.15 + 2.15 * n;
+    world.environmentIntensity = (1.15 + 2.15 * n) * (1 - .3 * clearedDay);
     const coverage = THREE.MathUtils.lerp(.9, .25, k);
     this.coverage = coverage;
     for (const cloud of this.clouds) {
@@ -213,8 +235,15 @@ export class SkyRig {
     this.starMaterial.opacity = n * THREE.MathUtils.smoothstep(coverage, .5, .35) * .85;
     if (!reducedMotion) this.starMaterial.opacity *= .88 + .12 * Math.sin(now * 3.7);
     (this.moonSprite.material as THREE.SpriteMaterial).opacity = n * (1 - coverage * .4);
+    // Sun disc rides the same direction as the directional light: hidden below
+    // the horizon, faded by cloud cover, sharpest in a cleared dawn sky.
+    // Height is flattened so it reads as rising over the far shore ridge —
+    // at true elevation it would sit far above the frame at any sane zoom.
+    this.sunSprite.position.copy(this.sunDir).multiplyScalar(220);
+    this.sunSprite.position.y *= .35;
+    (this.sunSprite.material as THREE.SpriteMaterial).opacity = sunVisible * (1 - coverage * .85);
     const horizonWarmth = THREE.MathUtils.clamp(1 - Math.abs(elevation - 2) / 16, 0, 1) * (1 - n);
-    this.fog.setHex(0x0f1a26).lerp(new THREE.Color(0x7a4f38), horizonWarmth * .22 + k * .12);
+    this.fog.setHex(0x0f1a26).lerp(new THREE.Color(0x7a4f38), horizonWarmth * (.22 + .3 * k) + k * .12);
     (world.fog as THREE.Fog).color.copy(this.fog);
     if (!reducedMotion && simPhase === 'dispatch' && (tick * 7919) % 173 === 0 && tick !== this.lastFlashTick) {
       this.lastFlashTick = tick;

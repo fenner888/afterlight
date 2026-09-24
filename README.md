@@ -1,36 +1,80 @@
 # AFTERLIGHT
 
-A storm knocks out a miniature coastal district. With two repair crews and limited backup power, bring essential services back online—then watch the neighborhood light up.
+A storm knocks out a miniature coastal district. With two repair crews and not enough power for everyone, you decide what comes back first — then watch the neighborhood light up.
 
-**Status: Storm 01 first-playable blockout implemented September 21, 2026. Awaiting human gameplay review before detailed art or additional features. Not released.**
+A one-screen systems puzzle for [Hackyard Yard #3](https://hackyard.tech/yards/yard-3), theme **"One Screen."** It is a browser game, and everything happens on a single diorama and panel. There are no accounts, no backend and no install.
 
-Prepared for Hackyard Yard #3, “One Screen.” The live lineup lists @fenner888 as checked in. Build window: September 21–25, 2026, opening and closing at 18:00 UTC / 2 PM Eastern. Event page and FAQ reverified at kickoff.
+> Fictional game units and simplified rules. Not electrical engineering or emergency advice.
 
-## Start here
+## How to play
 
-- [Design direction](DESIGN.md): scene, interaction and reference images.
-- [Mission](specs/mission.md), [technical plan](specs/tech-stack.md), [roadmap](specs/roadmap.md).
-- [First playable](specs/first-playable/plan.md): prove the decisions with a blockout before art.
-- [Staged capacity scenario](specs/first-playable/scenario.md): service loads, feeder repairs and a hand-calculated priority comparison.
-- [Dedicated task handoff](HANDOFF.md).
-- [Competition/concept research](references/concept-review.md): prior evidence and limits.
+1. **Pick a storm.** Each incident is a single night in the same district.
+2. **Send your crews.** Click a broken feeder (substation) on the map and send a crew. Time starts on your first dispatch.
+3. **Decide who gets power.** When a feeder comes back, the game pauses and there usually isn't enough for everyone. Click dark buildings to reconnect them; the capacity bar shows what fits. Repairs never reconnect anything automatically, so the choice is always yours.
+4. **Watch the consequences.** Windows, streetlights, the pump and the harbor beacon follow the real simulated state. The clinic runs on a generator with limited fuel.
+5. **Compare.** The run summary shows how long each service was dark, with your last three runs side by side. There is deliberately no score, only tradeoffs.
+
+| Storm | Starts | What it's about |
+|---|---|---|
+| 01 · After the storm | 19:30 dusk | The first 6 units: the clinic and pump, or both housing blocks? |
+| 02 · Crew Short | 16:30 afternoon | One crew now and one back at 18:30. Quick fix first, or slow fix first? |
+| 03 · The Long Dark | 23:00 night | 4 units, a generator that dies at 04:00, and a swap you have to time. |
+
+**Controls**
+
+| Action | Mouse, trackpad or touch | Keyboard |
+|---|---|---|
+| Orbit | drag | ← → rotate, ↑ ↓ tilt |
+| Zoom (toward the cursor) | wheel or pinch | + − |
+| Pan | right-drag or Shift-drag | — |
+| Focus on a spot | double-click | — |
+| Reset the view | "Reset view" button | 0 |
+| Time | — | Space: play/pause · N: next event · R: replay |
+| Select a node | — | 1–9 |
+| Sound | header toggle | M |
+
+Every action is also available through native HTML controls: the district selector, the service strip and the inspector. Keyboard-only play, reduced motion and a no-WebGL fallback are all supported.
+
+## What's under the hood
+
+- **Deterministic simulation.** A pure TypeScript domain (`src/domain.ts`) runs on integer ticks. One tick is one simulated second, which is one world minute. Commands are validated and recorded, and replay rebuilds any moment from the command log. Frame rate can never change an outcome.
+- **Hand-calculated scenarios.** Every storm's reference runs were worked out by hand before any code ([Storm 01](specs/first-playable/scenario.md), [Storms 02–03](specs/first-playable/incidents.md)). The test suite asserts each run's exact per-service downtimes.
+- **Three.js diorama, all procedural.** There are no model or texture files. Materials, stone, brick, asphalt, water normals, sky, clouds and rain are generated in code. The scene also has planar water reflections, a day/night cycle driven by the world clock, bloom and automatic quality scaling.
+- **Traffic.** The utility trucks follow authored lanes and yield to each other. That logic is a pure module whose tests simulate every dispatch order and delay.
+- **Procedural sound.** Rain, wind, generator hum, trucks, relays and a sunrise swell are all synthesized with Web Audio, with no audio files.
+- **Small footprint.** The only runtime dependency is `three`. Versions are pinned exactly and locked.
+
+## Simplifications (on purpose)
+
+Loads are all-or-nothing and there are no line losses or surges. There is one shared district bus, and crews can't be cancelled once dispatched. Travel times are fixed. Flooding, blocked roads and random failures are out of scope. This is a puzzle about priorities, not a power-flow model.
 
 ## Run locally
 
-Node >=22.18 and npm. Install the verified lockfile with `npm ci --ignore-scripts`, then `npm run dev -- --port 5173 --strictPort`. The development server is loopback-only.
+Requires Node ≥ 22.18 and npm.
 
-Checks: `npm test`, `npm run build`, `npm run test:browser` (installed Chrome required), and `npm audit`. Browser tests start their own production preview on port 5197; build first. See [validation results and limitations](specs/first-playable/validation.md).
+```sh
+npm ci --ignore-scripts
+npm run dev -- --port 5173 --strictPort   # http://127.0.0.1:5173
+```
 
-For a quick paused run, inspect Feeder A and dispatch Crew 1, then Feeder B and Crew 2. Use **Next event** twice to reach minute 4. Choose clinic + pump or both housing groups. The next repair at minute 8 makes full restoration possible, but each remaining service must be reconnected explicitly. **Review replay** is read-only; **Return to live** preserves your run. Restart requires confirmation. Nothing is persisted when you reload.
+Checks:
 
-## The loop
+```sh
+npm test               # domain, scenario, replay, clock and traffic tests (Node test runner)
+npm run build          # strict typecheck + production build
+npm run test:browser   # Playwright against a production preview (installed Chrome)
+npm run test:cross     # smoke subset on Playwright WebKit and Firefox
+npm audit
+```
 
-Inspect → prioritize → assign a crew → repair capacity → reconnect loads → compare decisions in replay.
+Validation results and known gaps: [validation.md](specs/first-playable/validation.md).
 
-Storm 01 repairs capacity in two stages: 6 CU, then 13 CU after the second feeder repair. Players choose which services to reconnect during the gap; repair never reconnects them automatically. Blocked roads and flooding are outside the first release. Service lighting and event history must reflect actual simulation state.
+## Project docs
 
-One persistent district, with no signup or API key required to play. This is a fictional game, not an infrastructure or emergency tool.
+[Design brief](DESIGN.md) · [Requirements](specs/first-playable/requirements.md) · [Roadmap](specs/roadmap.md) · [Tech stack](specs/tech-stack.md)
 
-[Yard #3](https://hackyard.tech/yards/yard-3) · [Rules](https://hackyard.tech/faq)
+The images in `references/concepts/` are AI-generated mood references made before the build window ([prompts](references/concepts/PROMPTS.md)). They are not screenshots or runtime assets.
 
-Images are AI-generated design targets, not screenshots, completed features or performance evidence. Not approved runtime assets. No public release or license decision yet.
+## License
+
+[MIT](LICENSE)
