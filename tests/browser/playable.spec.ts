@@ -242,6 +242,10 @@ test('cinematic plays on Begin, world clock tracks sim time and sunrise ends at 
   await expect(page.locator('#mode')).toHaveText('PAUSED');
   await expect(page.locator('#world-time')).toContainText('06:30');
   await expect(page.locator('#decision')).toContainText('Dawn');
+  await expect(page.locator('#summary tr', { hasText: 'Fully restored' }).locator('td').last()).toHaveText(worldText(480 + delayB));
+  await expect(page.locator('#task-banner')).toContainText(`came back on at ${worldText(480 + delayB)}`);
+  await expect(page.locator('#task-banner')).toContainText('The sun is up');
+  await expect(page.locator('#sunrise')).toHaveCount(0);
 });
 
 test('auto-pause at repair completions and restored run summary', async ({ page }) => {
@@ -852,6 +856,11 @@ test('try another storm opens the picker from the summary', async ({ page }) => 
   await expect(page.locator('#briefing')).toBeVisible();
   await expect(page.locator('#incident-picker')).toBeVisible();
   await expect(page.locator('#incident-cards .incident-card')).toHaveCount(3);
+  await page.locator('#incident-cards [data-storm="storm-02"]').click();
+  await expect(page.locator('#restart-dialog')).toBeHidden();
+  await expect(page.locator('#incident-briefing')).toBeVisible();
+  await page.locator('#begin').click();
+  await expect(page.locator('#incident-number')).toHaveText('INCIDENT 02');
 });
 
 test('switching storms mid-run confirms; cancel preserves the run', async ({ page }) => {

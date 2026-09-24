@@ -75,7 +75,7 @@ Mark's verdict on the atmosphere pass: still not realistic enough to win; wants 
 
 - World time is derived from the simulation tick: **1 simulation second = 1 world minute**, so one simulated minute is one world hour. The storm hits at **19:30** (civil dusk). Consequences: Feeder A repaired at 23:30, clinic backup expiry at 01:30, Feeder B at 03:30, astronomical dawn ~05:00, sunrise ~06:30 (simulation 11:00). Night is the play space; dawn is the reward.
 - The header shows world time next to simulation time ("Night · 23:30 · sim 04:00"). Replay scrubbing moves the sky with the cursor. Everything sky-related is a pure function of tick (plus smoothing), never of wall-clock time.
-- After all services are restored the summary offers **"Watch the sun come up"**: it simply resumes simulation time at 30× until world 06:30 (simulation 11:00) and then pauses. No downtime accrues; nothing in the domain changes.
+- After all services are restored the summary offers **"Watch the sun come up"**: it simply resumes simulation time at 30× until world 06:30 (simulation 11:00) and then pauses. No downtime accrues; nothing in the domain changes. The "Fully restored" row and the task banner always quote the tick of the final reconnection, not the current clock — after dawn the banner reads "Every light came back on at … — the sun is up" and the sunrise button is no longer offered.
 
 ### Rendering
 
@@ -166,7 +166,7 @@ Numbers and copy: [incidents.md](incidents.md).
 - **World clock.** World time, day phase and sunrise tick take the scenario's worldStart. The presentation passes the active config; no hidden global. The 660 sunrise literal is replaced by `sunriseTick(config)`.
 - **Picker.** The briefing dialog opens on the picker: three cards (title, subtitle, pickerLine). Choosing one shows that storm's briefing, then Begin/Skip. A header "Incidents" button reopens the picker. Choosing a different storm, or re-choosing one mid-run, asks for the same confirmation as Restart. The header incident label shows "INCIDENT 0N" and the title. Restart restarts the current storm.
 - **Away crew in the scene.** While away, that truck isn't in the district. It drives in from the east end of the main road (westbound lane) over the 30 ticks before returnAt, down the access road, and reverses into its nose-out bay, arriving exactly at returnAt. Traffic yield rules apply. Cover it in the traffic tests (returning truck vs a departing Crew 1 at all dispatch ticks 0–119).
-- **Run comparison.** Completed runs are kept in memory per storm for the session (no persistence): the latest three. The summary shows them as columns (Run 1/2/3) with per-service downtime, fully-restored world time and reconnection order. No score, no winner highlight, no colour-only difference. "Try a different order" restarts the same storm. The summary also offers "Try another storm", which opens the picker.
+- **Run comparison.** Completed runs are kept in memory per storm for the session (no persistence): the latest three. The summary shows them as columns (Run 1/2/3) with per-service downtime, fully-restored world time and reconnection order. No score, no winner highlight, no colour-only difference. "Try a different order" restarts the same storm. The summary also offers "Try another storm", which opens the picker; picking a storm from a completed run switches directly without the restart confirmation (the run is already archived), while a mid-run pick still confirms.
 - **Audio.** Crew return plays the `decision` cue. No new cues.
 
 ### Release polish (September 24)

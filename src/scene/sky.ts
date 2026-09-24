@@ -191,7 +191,10 @@ export class SkyRig {
     this.nightness += (nightTarget - this.nightness) * ease;
     const n = this.nightness;
     const exposureTarget = (EXPOSURE[day] ?? 1) + (day === 'dawn' || day === 'day' ? .1 * k : 0);
-    this.exposure += (exposureTarget - this.exposure) * (reducedMotion ? 1 : Math.min(1, dt * 1.6));
+    // Fall fast when the scene is brightening (sunrise at 30x would otherwise
+    // outrun the adaptation and blow out); rise gently into dusk/night.
+    const exposureRate = exposureTarget < this.exposure ? 5.5 : 1.6;
+    this.exposure += (exposureTarget - this.exposure) * (reducedMotion ? 1 : Math.min(1, dt * exposureRate));
     renderer.toneMappingExposure = this.exposure;
     const sunVisible = THREE.MathUtils.smoothstep(elevation, -6, 3);
     const dayFactor = THREE.MathUtils.smoothstep(elevation, 0, 25);
@@ -244,6 +247,10 @@ export class SkyRig {
     (this.sunSprite.material as THREE.SpriteMaterial).opacity = sunVisible * (1 - coverage * .85);
     const horizonWarmth = THREE.MathUtils.clamp(1 - Math.abs(elevation - 2) / 16, 0, 1) * (1 - n);
     this.fog.setHex(0x0f1a26).lerp(new THREE.Color(0x7a4f38), horizonWarmth * (.22 + .3 * k) + k * .12);
+    // Day haze: distant geometry (the far shore strip, far water) must fog
+    // toward the pale daytime sky, not the night navy — otherwise the shore
+    // renders as a hard black band under a bright sky.
+    this.fog.lerp(new THREE.Color(0xa9b8bd), dayFactor * .85);
     (world.fog as THREE.Fog).color.copy(this.fog);
     if (!reducedMotion && simPhase === 'dispatch' && (tick * 7919) % 173 === 0 && tick !== this.lastFlashTick) {
       this.lastFlashTick = tick;

@@ -273,7 +273,12 @@ function positionPopover(): void {
 function taskText(state: State): string {
   const cfg = configOf(state);
   const current = phase(state);
-  if (current === 'restored') return `Every light is back on at ${wt(state.tick, state)}. Watch the sun come up, or review your run.`;
+  if (current === 'restored') {
+    const restored = restoredTick(state);
+    return state.tick >= sunriseTick(cfg)
+      ? `Every light came back on at ${wt(restored, state)}. The sun is up — review your run.`
+      : `Every light is back on at ${wt(restored, state)}. Watch the sun come up, or review your run.`;
+  }
   const working = CREW_IDS.filter(id => state.crews[id].phase === 'traveling' || state.crews[id].phase === 'repairing');
   const idle = CREW_IDS.filter(id => state.crews[id].phase === 'idle');
   const away = CREW_IDS.filter(id => state.crews[id].phase === 'away');
@@ -464,12 +469,14 @@ function command(action: Action): void {
   refresh();
 }
 
+const restoredTick = (s: State): number => s.events.filter(e => e.kind === 'reconnected').at(-1)?.tick ?? s.tick;
+
 function summarize(state: State): RunSummary {
   return {
     downtimes: Object.fromEntries(SERVICE_IDS.map(id => [id, state.services[id].downtime])) as Record<ServiceId, number>,
     order: state.events.filter(event => event.kind === 'reconnected').map(event => ({ tick: event.tick, target: event.node as ServiceId })),
     backupRemaining: state.services.clinic.backupRemaining,
-    endTick: state.tick,
+    endTick: restoredTick(state),
   };
 }
 
@@ -592,7 +599,8 @@ function renderSummary(): void {
   close.id = 'summary-close';
   close.textContent = 'Back to district';
   close.addEventListener('click', () => { summaryDismissed = true; element('summary').hidden = true; button('play').focus(); });
-  actions.append(sunrise, retry, another, reviewButton, close);
+  if (live.tick < sunriseTick(cfg)) actions.append(sunrise);
+  actions.append(retry, another, reviewButton, close);
   panel.append(downtimeTitle, table, orderTitle, orderColumns, actions);
 }
 
@@ -998,6 +1006,11 @@ function startStorm(id: ScenarioId): void {
 }
 
 function chooseStorm(id: ScenarioId): void {
+  if (phase(live) === 'restored') {
+    archiveRun();
+    startStorm(id);
+    return;
+  }
   if (runInProgress()) {
     pendingStorm = id;
     briefing.close(); // no intent — the close handler leaves the run alone

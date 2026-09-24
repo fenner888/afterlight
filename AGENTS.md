@@ -4,7 +4,7 @@ Read README.md, DESIGN.md and specs/ before work. specs/ is the source of truth.
 
 ## First-playable authority
 
-Mark explicitly authorized the build on September 21, 2026 after the 18:00 UTC kickoff. He has since approved the guided flow, realism/day-night, vehicle, clarity, sound and art passes, and (September 24) Storms 02/03 with a comparison summary — see specs/roadmap.md. Persistence/share remain unapproved. Local commits approved September 23; publication, pushing and deployment still require his review. Build window ends September 25 at 18:00 UTC (2 PM Eastern). Event rules were reverified at kickoff.
+Mark explicitly authorized the build on September 21, 2026 after the 18:00 UTC kickoff. He has since approved the guided flow, realism/day-night, vehicle, clarity, sound and art passes, and (September 24) Storms 02/03 with a comparison summary — see specs/roadmap.md. Persistence/share remain unapproved. Local commits approved September 23. Public repository (MIT), GitHub Pages deployment and push to `main` approved September 24; each further push redeploys, so get his review before pushing. Build window ends September 25 at 18:00 UTC (2 PM Eastern). Event rules were reverified at kickoff.
 Pre-build images are design references, not implemented UI or eligible runtime assets. Verify eligibility before any reuse in the submission.
 Do not spawn agents without explaining scope/cost and obtaining approval.
 
@@ -36,6 +36,7 @@ Do not spawn agents without explaining scope/cost and obtaining approval.
 - `npm run build`: strict typecheck including unused-symbol checks, then production build. Three.js currently triggers Vite's 500 kB chunk warning; do not suppress the limit as a workaround.
 - `npm run test:browser`: production-browser checks; run the build first. Uses installed Chrome through Playwright, starts an isolated loopback preview on port 5197, and does not reuse existing servers. Port 4174 was occupied by unrelated work at kickoff; leave it alone.
 - `npm audit`: dependency vulnerability check. Full release audit and human review remain required.
-- Domain files are independent of rendering. No saves, imports, share URLs or backend exist in this milestone. Do not add them before the blockout review.
+- Live site: https://fenner888.github.io/afterlight/ (Pages deploy on every push to `main`). Debug handles are loopback-only, so drive the public URL through the real UI. To run the full suite against the deployed bytes, proxy them to 127.0.0.1:5197 and use a Playwright config without `webServer`. Automated suites are not a play-through: before reporting readiness, play every storm to the summary (including sunrise and replay) and look at the frames.
+- Domain files are independent of rendering. No saves, imports, share URLs or backend exist. Do not add them without Mark's explicit scope approval.
 - Hidden tabs pause with explicit resume. Replay is read-only and preserves live state. Both are specified in first-playable requirements.
 - Screenshots and browser failure traces are generated under ignored `test-results/`. If Devin blocks screenshot reads, obtain specific approval before temporarily changing that ignore entry, then restore it.
