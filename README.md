@@ -4,6 +4,8 @@ A storm knocks out a miniature coastal district. With two repair crews and not e
 
 **▶ Play: [fenner888.github.io/afterlight](https://fenner888.github.io/afterlight/)** (desktop Chrome, Edge, Safari or Firefox; sound on)
 
+![The district at night after every service has been reconnected](public/og.jpg)
+
 A one-screen systems puzzle for [Hackyard Yard #3](https://hackyard.tech/yards/yard-3), theme **"One Screen."** It is a browser game, and everything happens on a single diorama and panel. There are no accounts, no backend and no install.
 
 > Fictional game units and simplified rules. Not electrical engineering or emergency advice.

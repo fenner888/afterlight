@@ -1,6 +1,6 @@
 # Validation plan
 
-**First-playable checks run September 21, 2026.** Local blockout implemented; human gameplay/art/release approval is still pending. Commands, evidence and limitations below distinguish tested behavior from later release cases.
+**Current release: September 24, 2026** — see "September 24 release evidence" at the end. Earlier sections are kept as the dated record of each milestone; their test counts and open items were accurate on those dates.
 
 ## Domain
 
@@ -60,3 +60,14 @@ Playwright 1.63.0 projects `webkit` and `firefox` (browser binaries installed vi
 - Smoke coverage is deliberately narrow: it proves the app boots, simulates, renders and takes keyboard input on each engine. It does not re-run the 43-test functional suite per engine; visual/performance parity beyond canvas presence is unchecked.
 
 Still untested: real iOS Safari and real Android devices, assistive technology/screen readers, native select behavior, real touch input, exhaustive contrast checks, per-engine performance, and the full release audit. Human review remains the next gate.
+
+## September 24 release evidence
+
+Public build: https://fenner888.github.io/afterlight/ (GitHub Pages, deployed by `.github/workflows/pages.yml` after `npm test` and `npm run build`).
+
+- `npm test`: **38/38** (domain, three storms' hand-calculated reference runs, replay, clock, traffic). `npm run build`: pass. `npm run test:browser`: **47/47** in installed Chrome. `npm run test:cross`: **8/8** (WebKit, Firefox). `npm audit`: 0 vulnerabilities.
+- The full Chrome suite and the cross-engine smoke subset were also run against the deployed bytes (proxied to loopback): 47/47 and 8/8.
+- Manual play-through of the public URL through the real UI (no debug handles): Storm 01 clinic-first and housing-first with fuel warning, clinic expiry, sunrise, replay scrub/return and two-run comparison; Storm 02 with Crew 2's 18:30 return; Storm 03 with the 03:00 swap (clinic 0h 00m). No console errors, page errors or failed requests. Load and first dispatch also checked at 390×844 and 820×1180 (touch emulation), and in Playwright WebKit and Firefox.
+- Defects found by that play-through and fixed before release: post-sunrise banner and "Fully restored" quoted the current clock instead of the final reconnection; a needless restart confirmation when switching storms from a completed run; a sunrise exposure blow-out at 30×; a near-black distant shore in daylight (night fog colour); and a render hitch from disposing line materials on every reconnect/selection, which forced shader relinks.
+- Known minor issues: numbered markers overlap on phone-width screens; the compass mark has low contrast in daylight.
+- Still untested: real iOS/Android devices and GPUs, real touch input, screen readers, exhaustive contrast checks.
