@@ -391,12 +391,15 @@ export class Fleet {
     const lampMaterial = ctx.track(new THREE.MeshStandardMaterial({ color: 0x3a352b, emissive: 0xffc98a, emissiveIntensity: 1.4 }));
     const lampGeometry = ctx.track(new THREE.SphereGeometry(.045, 8, 6));
     const bollards: [number, number][] = [[-11, 9.12], [-10, 9.12], [-8.2, 9.12], [-7.4, 9.12]];
-    // [x, z, heading, length, beam, wheelhouse]
+    // [x, z, heading, length, beam, wheelhouse]. The pier deck spans x -10.15..-8.45,
+    // z 9.4..13.8 and the quay face sits at z 10.02; hulls lie alongside with a
+    // fender gap, never under the planks or the capstone.
     const spots: [number, number, number, number, number, boolean][] = [
-      [-8.25, 12.2, .12, 2.4, .92, true],   // delivery boat alongside the pier
-      [-6.1, 12.9, -.28, 1.9, .74, true],   // small fishing boat
-      [-11.6, 13.6, .5, 1.9, .74, false],   // open boat
+      [-7.74, 11.95, -Math.PI / 2, 2.4, .92, true],  // delivery boat along the pier's east side, bow to sea
+      [-5.9, 10.95, 0, 1.9, .74, true],              // fishing boat along the quay face, on the fenders
+      [-10.78, 12.2, -Math.PI / 2, 1.9, .74, false], // open boat along the pier's west side
     ];
+    const BASE = -.7; // hull bottom ~.19 below the -.82 waterline: a real draft, not floating on top
     spots.forEach(([bx, bz, heading, L, W, wheelhouse], i) => {
       const root = new THREE.Group();
       const local: THREE.BufferGeometry[] = [];
@@ -426,7 +429,7 @@ export class Fleet {
         if (d < bd) { bd = d; best = b; }
       }
       const cleatLocal = new THREE.Vector3(-L * .42, .34, 0);
-      const worldFrom = cleatLocal.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), heading).add(new THREE.Vector3(bx, 0, bz));
+      const worldFrom = cleatLocal.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), heading).add(new THREE.Vector3(bx, BASE, bz));
       const worldTo = new THREE.Vector3(best[0], .6, best[1]);
       const dir = worldTo.clone().sub(worldFrom);
       const ropeLen = dir.length();
@@ -435,7 +438,7 @@ export class Fleet {
       rope.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize()));
       rope.translate(worldFrom.x, worldFrom.y, worldFrom.z);             // now world-space
       // World-space rope -> boat-local so it bobs with the hull.
-      rope.applyMatrix4(new THREE.Matrix4().makeRotationY(-heading).multiply(new THREE.Matrix4().makeTranslation(-bx, .58, -bz)));
+      rope.applyMatrix4(new THREE.Matrix4().makeRotationY(-heading).multiply(new THREE.Matrix4().makeTranslation(-bx, -BASE, -bz)));
       local.push(colorize(rope, 0x4a4038));
       // ExtrudeGeometry is non-indexed; normalize everything before merging.
       const normalized = local.map(g => (g.index ? g.toNonIndexed() : g));
@@ -445,10 +448,10 @@ export class Fleet {
       const mesh = new THREE.Mesh(geometry, hullMaterial);
       mesh.castShadow = true;
       root.add(mesh);
-      root.position.set(bx, -.58, bz);
+      root.position.set(bx, BASE, bz);
       root.rotation.y = heading;
       ctx.world.add(root);
-      this.boats.push({ root, base: -.58, phase: i * 2.1 });
+      this.boats.push({ root, base: BASE, phase: i * 2.1 });
     });
   }
 
