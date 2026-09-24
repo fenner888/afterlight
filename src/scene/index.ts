@@ -44,6 +44,9 @@ export class DistrictScene {
   private selection: THREE.Mesh;
   private dependencies = new THREE.Group();
   private dependencyKey = '';
+  // Line materials are cached, never disposed on redraw: disposing the last
+  // user of a shader program releases it, and the next state change relinks.
+  private lineMaterials = new Map<string, THREE.LineBasicMaterial | THREE.LineDashedMaterial>();
   private observer: ResizeObserver;
   private contextLost = false;
   private reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -295,11 +298,10 @@ export class DistrictScene {
           const [sx, sz] = POSITIONS[service];
           const points = [new THREE.Vector3(fx, y, fz), new THREE.Vector3(0, y, -2.1), new THREE.Vector3(sx, y, sz)];
           const geometry = new THREE.BufferGeometry().setFromPoints(points);
-          const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
-          this.power.add(new THREE.Line(geometry, material));
+          this.power.add(new THREE.Line(geometry, this.lineMaterial(color, opacity)));
         }
         const stubGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(fx, y, fz), new THREE.Vector3(fx, y, POSITIONS.supply[1]), new THREE.Vector3(POSITIONS.supply[0], y, POSITIONS.supply[1])]);
-        this.power.add(new THREE.Line(stubGeometry, new THREE.LineBasicMaterial({ color: repaired ? 0x9fe0c6 : 0x37434a, transparent: true, opacity: repaired ? .9 : .45 })));
+        this.power.add(new THREE.Line(stubGeometry, this.lineMaterial(repaired ? 0x9fe0c6 : 0x37434a, repaired ? .9 : .45)));
       }
     }
     const dependencyKey = `${selected}/${state.feeders['feeder-a']}/${state.feeders['feeder-b']}`;
@@ -313,8 +315,7 @@ export class DistrictScene {
       const end = isService(selected) ? POSITIONS[selected] : feeder;
       const points = [new THREE.Vector3(start[0], .59, start[1]), new THREE.Vector3(feeder[0], .59, start[1]), new THREE.Vector3(feeder[0], .59, feeder[1]), new THREE.Vector3(feeder[0], .59, 1.8), new THREE.Vector3(end[0], .59, 1.8), new THREE.Vector3(end[0], .59, end[1])];
       const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const material = new THREE.LineDashedMaterial({ color: state.feeders[id] === 'repaired' ? 0x8bc7b0 : 0xdfac60, dashSize: .23, gapSize: .16, transparent: true, opacity: .7 });
-      const line = new THREE.Line(geometry, material);
+      const line = new THREE.Line(geometry, this.lineMaterial(state.feeders[id] === 'repaired' ? 0x8bc7b0 : 0xdfac60, .7, true));
       line.computeLineDistances();
       this.dependencies.add(line);
     }
@@ -652,20 +653,23 @@ export class DistrictScene {
     if (this.rain) this.rain.visible = !this.reduced.matches && this.renderer.capabilities.isWebGL2;
     if (this.reduced.matches) this.cine.skip();
   };
-  private clearDependencies(): void {
-    for (const child of this.dependencies.children) {
-      const line = child as THREE.Line<THREE.BufferGeometry, THREE.LineDashedMaterial>;
-      line.geometry.dispose();
-      line.material.dispose();
+  private lineMaterial(color: number, opacity: number, dashed = false): THREE.LineBasicMaterial | THREE.LineDashedMaterial {
+    const key = `${dashed ? 'd' : 'b'}:${color}:${opacity}`;
+    let material = this.lineMaterials.get(key);
+    if (!material) {
+      material = this.ctx.track(dashed
+        ? new THREE.LineDashedMaterial({ color, dashSize: .23, gapSize: .16, transparent: true, opacity })
+        : new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+      this.lineMaterials.set(key, material);
     }
+    return material;
+  }
+  private clearDependencies(): void {
+    for (const child of this.dependencies.children) (child as THREE.Line).geometry.dispose();
     this.dependencies.clear();
   }
   private clearPower(): void {
-    for (const child of this.power.children) {
-      const line = child as THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-      line.geometry.dispose();
-      line.material.dispose();
-    }
+    for (const child of this.power.children) (child as THREE.Line).geometry.dispose();
     this.power.clear();
   }
   dispose(): void {
