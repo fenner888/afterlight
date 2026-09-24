@@ -2,7 +2,7 @@
 
 A storm knocks out a miniature coastal district. With two repair crews and not enough power for everyone, you decide what comes back first — then watch the neighborhood light up.
 
-**▶ Play: [fenner888.github.io/afterlight](https://fenner888.github.io/afterlight/)** (desktop Chrome, Edge, Safari or Firefox; sound on)
+**▶ Play: [fenner888.github.io/afterlight](https://fenner888.github.io/afterlight/)** (desktop Chrome, Edge, Safari or Firefox; sound on) · **[Demo video (2 min)](https://fenner888.github.io/afterlight/demo.mp4)**
 
 ![The district at night after every service has been reconnected](public/og.jpg)
 
